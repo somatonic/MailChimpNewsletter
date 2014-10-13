@@ -1,0 +1,456 @@
+<?php
+
+/**
+ * MailChimp Newsletter
+ * Lists Management
+ *
+ *
+ * ProcessWire 2.x
+ * Copyright (C) 2010 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ * http://www.ryancramer.com
+ *
+ */
+
+
+class MailChimpLists extends Process implements ConfigurableModule {
+
+    /**
+     * getModuleInfo is a module required by all modules to tell ProcessWire about them
+     *
+     * @return array
+     *
+     */
+    public static function getModuleInfo() {
+
+        return array(
+            'title' => 'MailChimp Lists',
+            'version' => 1,
+            'summary' => 'Manage MailChimp Lists',
+            'author' => "Philipp Urlich 'Soma'",
+            'href' => '',
+            'singular' => true,
+            'permission' => "mailchimp",
+            'requires' => array('MailChimpNewsletter')
+        );
+    }
+
+    static protected $defaults = array(
+
+        );
+
+    public function init() {
+        parent::init();
+        $this->mailchimp = $this->modules->get("MailChimpNewsletter");
+        $this->apikey = $this->mailchimp->apikey;
+        $this->mcapi = $this->mailchimp->mcapi;
+        $this->modules->get("JqueryWireTabs");
+    }
+
+    public function execute(){
+        $this->fuel->set('processHeadline', 'Lists');
+
+        $retval = $this->mcapi->lists();
+        if ($this->mcapi->errorCode){
+            $out .= $this->_("Unable to load Lists!");
+            $out .= "\n\tCode = ".$this->mcapi->errorCode;
+            $out .= "\n\tMsg = ".$this->mcapi->errorMessage."\n";
+        }
+
+        if(empty($retval)) return $this->error($this->_("No lists found. Create a new list first."));
+
+        // create table object to be rendered
+        $table = $this->_listsTable($retval);
+
+        $add = $this->modules->get("InputfieldButton");
+        $add->attr("value",$this->_("Create new List"));
+        $add->attr('class', $add->class . ' head_button_clone');
+        $add->attr('href', "./add/");
+
+        return $table->render(); //;. $add->render();
+    }
+
+
+    public function executeDelete() {
+        $id = $this->input->get->id;
+        $email = $this->input->get->email;
+        $this->mcapi->listUnsubscribe($id, $email, true, true, true);
+        if(!$this->_checkErrorMC()){
+            $this->error($this->_("Unable to delete E-mail from the list"));
+            $this->session->redirect("../edit/?id=$id");
+        } else {
+            $this->session->redirect("../edit/?id=$id");
+        }
+    }
+
+    public function executeAdd() {
+
+    }
+
+    public function executeEdit() {
+
+        $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Lists'));
+        $this->fuel->set('processHeadline', 'Edit List');
+
+        $list_id = $this->input->get->id; // string
+
+        $retval = $this->_getMCList($list_id);
+        $form = $this->_buildEditForm($retval['data'][0]);
+        $list = $retval['data'][0];
+
+        // save submited form
+        if($this->input->post->submit) {
+
+            $form->email_test->required = 0;
+            $form->processInput($this->input->post);
+
+            if(!$form->getErrors()) {
+
+            }
+        }
+        if($this->input->post->subscribe){
+            $form->email->required = 1;
+            $form->email_type->required = 1;
+            $form->processInput($this->input->post);
+
+            if(!$form->getErrors()) {
+                $id = $this->input->post->id;
+                $email = $this->input->post->email;
+                $type = $this->input->post->email_type;
+                $this->mcapi->listSubscribe($id, $email, null, $type, false);
+                if(!$this->_checkErrorMC()){
+                    $this->error($this->_("Unable to subscribe E-mail to MailChimp"));
+                } else {
+                    $this->Message("Added E-mail address $email to the list.");
+                }
+            }
+
+        }
+
+        return $form->render();
+    }
+
+
+    /**
+     * get all lists
+     * @return MarkupAdminDataTable table of lists
+     */
+    private function _listsTable(Array $lists){
+
+        $table = $this->modules->get("MarkupAdminDataTable");
+        $table->headerRow(array(
+                          "Name",
+                          "Count",
+                          "Created",
+                          "Type",
+                          "Default From Name",
+                          "Default From Email",
+                          "Default Subject",
+                          "Language",
+                          "ID",
+                          "Action"
+                        ));
+        foreach($lists['data'] as $ca) {
+            $action_name = $this->_("edit");
+            $action = "edit/?id=".$ca['id'];
+
+            $table->row(array(
+                $ca['name'] => "$action",
+                $ca['stats']['member_count'],
+                $ca['date_created'],
+                $ca['email_type_option'],
+                $ca['default_from_name'],
+                $ca['default_from_email'],
+                $ca['default_subject'],
+                $ca['default_language'],
+                $ca['id'],
+                $action_name => $action
+            ));
+        }
+
+        return $table;
+    }
+
+    protected function _listInsert($newsletter_id, $campaign_id) {
+        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, created) VALUES ('$campaign_id',$newsletter_id,now())";
+        $result = $this->db->query($query);
+        $this->message($this->_("Campaign inserted into DB"));
+        return mysqli_insert_id($this->db);
+
+    }
+
+    protected function _listUpdate($newsletter_id, $campaign_id) {
+        $values = "newsletter_id=" . $newsletter_id;
+        $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
+        $result = $this->db->query($query);
+        $this->message($this->_("Campaign updated in DB"));
+        return $result;
+
+    }
+
+
+
+    protected function _buildEditForm($data = array()) {
+
+        $this->modules->get('JqueryFancybox');
+
+        $list_id = $data['id'];
+
+        $form = $this->modules->get("InputfieldForm");
+        $form->action = "../edit/?id=$list_id";
+        $form->method = "post";
+        $form->attr('id',$this->className());
+
+        $field = $this->modules->get('InputfieldHidden');
+        $field->attr('name', 'id');
+        $field->attr('value', $list_id);
+        $form->append($field);
+
+
+        /**
+         * Tab Subscribe
+         */
+        $wrapper_subscription = new InputfieldWrapper();
+        $wrapper_subscription->attr("id", $this->className() . "Subscription");
+        $wrapper_subscription->attr("title", $this->_("Subscription Forms"));
+
+        $field = $this->modules->get("InputfieldMarkup");
+        $field->attr('id+name',"subscribe_url_short");
+        $field->label = $this->_("Subscribe short URL");
+        $field->description = $this->_("Use this URL to let users subscribe to this list");
+        $field->value = "<a href='{$data["subscribe_url_short"]}'>{$data["subscribe_url_short"]}</a>";
+        $wrapper_subscription->add($field);
+
+        $field = $this->modules->get("InputfieldMarkup");
+        $field->attr('id+name',"subscribe_url_long");
+        $field->label = $this->_("Subscribe long URL");
+        $field->description = $this->_("Use this URL to let users subscribe to this list");
+        $field->value = "<a href='{$data["subscribe_url_long"]}'>{$data["subscribe_url_long"]}</a>";
+        $wrapper_subscription->add($field);
+
+        /**
+         * Tab Beamer
+         */
+        $wrapper_beamer = new InputfieldWrapper();
+        $wrapper_beamer->attr("id", $this->className() . "Beamer");
+        $wrapper_beamer->attr("title", $this->_("Email Beamer"));
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id',"beamer_address");
+        $field->label = $this->_("Beamer Email Address");
+        $field->description = $this->_("Use this Email Address to send a custom created Email this list.");
+        $field->value = $data["beamer_address"];
+        $wrapper_beamer->add($field);
+
+        /**
+         * Tab Settings
+         */
+        $wrapper_settings = new InputfieldWrapper();
+        $wrapper_settings->attr("id", $this->className() . "Settings");
+        $wrapper_settings->attr("title", $this->_("Settings"));
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"name");
+        $field->label = $this->_("Name");
+        $field->description = $this->_("Please enter a name for the list");
+        $field->required = 1;
+        $field->attr('value', $data['name']);
+        $wrapper_settings->add($field);
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"default_subject");
+        $field->label = $this->_("Default Email Subject");
+        $field->description = $this->_("Subject for your campaign message.");
+        $field->required = 1;
+        $field->attr('value',$data['default_subject']);
+        $wrapper_settings->add($field);
+
+        $field = $this->modules->get("InputfieldEmail");
+        $field->attr('id+name',"default_from_email");
+        $field->label = $this->_("Default From Email Address");
+        $field->description = $this->_("the From: email address for your campaign message.");
+        $field->required = 1;
+        $field->attr('value',$data['default_from_email']);
+        $wrapper_settings->add($field);
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"default_from_name");
+        $field->label = $this->_("Default From Name");
+        $field->description = $this->_("the From: name for your campaign message (not an email address).");
+        $field->required = 1;
+        $field->attr('value',$data['default_from_name']);
+        $wrapper_settings->add($field);
+
+
+
+        /**
+         * Tab Email Lists
+         */
+        $wrapper_list = new InputfieldWrapper();
+        $wrapper_list->attr("id", $this->className() . "ListMembers");
+        $wrapper_list->attr("title", $this->_("List Members"));
+
+        $preview = $this->modules->get("InputfieldMarkup");
+
+        $retval = $this->mcapi->listMembers($data["id"], "subscribed", null, 0 , 5000);
+        if(!$this->_checkErrorMC()){
+            $this->error($this->error("Unable to load lists members!"));
+        } else {
+            $preview->value .= sprintf($this->_("Total member count: %s"),$retval["total"]);
+            $preview->value .= " | ";
+            $preview->value .= sprintf($this->_("Viewing: %s"), sizeof($retval["data"])) . "<br/>";
+            $table = $this->modules->get("MarkupAdminDataTable");
+            $table->headerRow(array(
+                              "Email",
+                              "Last modified",
+                              "Actions"
+                        ));
+            foreach($retval["data"] as $member){
+                $table->row(array(
+                            $member["email"],
+                            $member["timestamp"],
+                            "delete" => "../delete/?id={$data["id"]}&email={$member["email"]}"
+                        ));
+            }
+            $preview->value .= $table->render();
+        }
+
+
+        $fieldset = $this->modules->get("InputfieldFieldset");
+        $fieldset->label = "Subscribe an E-mail Address";
+        $fieldset->collapsed = Inputfield::collapsedYes;
+
+        $field = $this->modules->get("InputfieldEmail");
+        $field->label = $this->_("E-mail Address");
+        $field->attr("id+name","email");
+        $fieldset->add($field);
+
+        $field = $this->modules->get("InputfieldSelect");
+        $field->label = $this->_("E-mail Type");
+        $field->attr("id+name","email_type");
+        $field->addOptions(array(
+                           'html' => 'HTML',
+                           'text' => 'Text'
+                           ));
+        $fieldset->add($field);
+
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->attr("id+name","subscribe");
+        $field->attr("value","subscribe");
+        $fieldset->add($field);
+
+        $wrapper_list->add($fieldset);
+        $wrapper_list->add($preview);
+
+
+
+        $form->add($wrapper_list);
+        $form->add($wrapper_settings);
+        $form->add($wrapper_subscription);
+        $form->add($wrapper_beamer);
+
+
+        /**
+         * update button
+         */
+        // $save = $this->modules->get("InputfieldSubmit");
+        // $save->value = $this->_("Update List");
+        // $save->attr("id+name", "submit");
+        // $save->attr("class", $save->class . " head_button_clone");
+
+        // $form->add($save);
+        return $form;
+    }
+
+
+    /**
+     * get MailChimp list
+     * @param  string $cid campaign id
+     * @return mixed false on error, campaign if successful
+     */
+    protected function _getMCList($cid) {
+        $retval = $this->mcapi->lists(array('list_id' => $cid),0,20);
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('Unable to retrieve List!'));
+            return false;
+        } else {
+            return $retval;
+        }
+    }
+
+
+    protected function _getLists(){
+        $retval = $this->mcapi->lists();
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('"Unable to load lists!"'));
+            return false;
+        } else {
+            return $retval['data'];
+        }
+    }
+
+    protected function _checkErrorMC($msg = '') {
+        if($this->mcapi->errorCode) {
+            $this->error(sprintf($this->_("ErrorCode = %s"), $this->mcapi->errorCode));
+            $this->error(sprintf($this->_("ErrorMessage = %s"), $this->mcapi->errorMessage));
+            return false;
+        }
+        return true;
+    }
+
+    public function install() {
+
+        // db schema for saving list
+        $sql = <<< _END
+        CREATE TABLE {$this->className} (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            list_id VARCHAR(32) NULL,
+            parent_id INT NULL,
+            modified TIMESTAMP NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
+            created TIMESTAMP DEFAULT '0000-00-00 00:00:00',
+            PRIMARY KEY (`id`)
+        )
+        ENGINE = MyISAM DEFAULT CHARSET=utf8;
+_END;
+
+        $this->db->query($sql);
+
+    }
+
+    public function uninstall() {
+        $admin = $this->pages->find("name=mailchimp-lists")->first();
+        if($admin->id && $this->pages->delete($admin)) {
+            $this->message(__("Deleted mailchimp-lists admin page."));
+        } else {
+            $this->error(__("Couldn't find mailchimp-lists admin page."));
+        }
+
+        $this->db->query("DROP TABLE {$this->className}");
+
+    }
+
+    public static function getModuleConfigInputfields(array $data) {
+        // $data = array_merge(self::$defaults, $data);
+
+        // $fields = new InputfieldWrapper();
+        // $modules = wire("modules");
+
+        // $field = $modules->get("InputfieldText");
+        // $field->attr('name', 'apikey');
+        // $field->attr('size', 40);
+        // $field->attr('value', $data['apikey']);
+        // $field->label = "MailChimp API Key";
+        // $fields->append($field);
+
+        // $field = $modules->get("InputfieldText");
+        // $field->attr('name', 'remoteurl');
+        // $field->attr('size', 0);
+        // $field->attr('value', $data['remoteurl']);
+        // $field->label = "URL to webservice";
+        // $fields->append($field);
+
+        // return $fields;
+    }
+}

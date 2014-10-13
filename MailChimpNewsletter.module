@@ -1,0 +1,205 @@
+<?php
+
+/**
+ * MailChimp Newsletter
+ *
+ * ProcessWire 2.x
+ * Copyright (C) 2010 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ * http://www.ryancramer.com
+ *
+ */
+
+
+require_once( dirname(__FILE__) . "/MCAPI.class.php");
+
+
+class MailChimpNewsletter extends WireData implements Module, ConfigurableModule {
+
+    /**
+     * getModuleInfo is a module required by all modules to tell ProcessWire about them
+     *
+     * @return array
+     *
+     */
+    public static function getModuleInfo() {
+
+        return array(
+            'title' => 'MailChimp Newsletter',
+            'version' => 1,
+            'summary' => 'MailChimp Newsletter',
+            'author' => "Philipp Urlich 'Soma'",
+            'href' => '',
+            'singular' => true,
+            'autoload' => false,
+            // 'permission' => "mailchimp",
+            'installs' => array('MailChimpCampaigns','MailChimpLists')
+        );
+    }
+
+    static protected $defaults = array(
+            'apikey' => '',
+            'remoteurl' => ''
+        );
+
+    public function init() {
+        //parent::init();
+        $this->apikey = $this->data['apikey'];
+        $this->newsletter_parent_id = $this->data['newsletter_parent_id'];
+        $this->mcapi = new MCAPI($this->apikey);
+    }
+
+
+    protected function _getNewsletterPageID($id) {
+        $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$id';";
+        $res = $this->db->query($query);
+        $arr = $res->fetch_array();
+        return $arr['newsletter_id'];
+    }
+
+    /**
+     * get MailChimp campaign
+     * @param  string $cid campaign id
+     * @return mixed false on error, campaign if successful
+     */
+    protected function _getMCCampaign($cid) {
+        $retval = $this->mcapi->campaigns(array('campaign_id' => $cid),0,1);
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('Unable to retrieve Campaign!'));
+            return false;
+        } else {
+            return $retval;
+        }
+    }
+
+    protected function _updateMCCampaign($cid, $key, $value) {
+        $this->mcapi->campaignUpdate($cid, $key, $value);
+        if(!$this->_checkErrorMC()){
+            $this->error($this->_('Campaign update failed'));
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    protected function _getLists(){
+        $retval = $this->mcapi->lists();
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('"Unable to load lists!"'));
+            return false;
+        } else {
+            return $retval['data'];
+        }
+    }
+
+    protected function _checkErrorMC() {
+        if($this->mcapi->errorCode) {
+            $this->error(sprintf($this->_("ErrorCode = %s"), $this->mcapi->errorCode));
+            $this->error(sprintf($this->_("ErrorMessage = %s"), $this->mcapi->errorMessage));
+            return false;
+        }
+        return true;
+    }
+
+
+
+
+    /**
+     * MailChimp Helpers
+     */
+
+    public function subscribeListEmail($listID, $email){
+        $email = $this->sanitizer->email($email);
+        if(!$email) throw new WireException("No Email specified");
+        if(!$listID) throw new WireException("No ListID specified");
+
+        if($this->mcapi->listSubscribe($listID, $email, '') === true) {
+            $message = "<p class='ui-message'>Um die Anmeldung abzuschließen, klicken Sie bitte auf den Link in der E-Mail, die wir soeben an Sie geschickt haben.</p>";
+        } else {
+            // An error ocurred, return error message
+            $message = "<p class='ui-error'>Error: {$this->mcapi->errorMessage}</p>";
+        }
+        return $message;
+    }
+
+
+
+    public function install() {
+
+        // install admin pages needed
+
+        if(!$this->pages->get("name=mailchimp-newsletter")->id) {
+            $admin = new Page();
+            $admin->parent = $this->pages->get(2);
+            $admin->template = "admin";
+            $admin->title = "MailChimp Newsletter";
+            $admin->name = "mailchimp-newsletter";
+            $admin->process = $this->modules->get("ProcessList");
+            $mainpage = $admin->save();
+        }
+
+        $list_process = $this->modules->get("MailChimpCampaigns");
+        if(!$this->pages->get("name=mailchimp-campaigns")->id) {
+            $admin_c = new Page();
+            $admin_c->parent = $admin;
+            $admin_c->template = "admin";
+            $admin_c->title = "MailChimp Campaigns";
+            $admin_c->name = "mailchimp-campaigns";
+            $admin_c->process = $list_process;
+            $admin_c->save();
+        }
+
+        $list_process = $this->modules->get("MailChimpLists");
+        if(!$this->pages->get("name=mailchimp-lists")->id) {
+            $admin_l = new Page();
+            $admin_l->parent = $admin;
+            $admin_l->template = "admin";
+            $admin_l->title = "MailChimp Lists";
+            $admin_l->name = "mailchimp-lists";
+            $admin_l->process = $list_process;
+            $admin_l->save();
+        }
+    }
+
+    public function uninstall() {
+        $admin = $this->pages->find("name=mailchimp-newsletter")->first();
+        if($admin->id && $this->pages->delete($admin)) {
+            $this->message(__("Deleted mailchimp-newsletter admin page."));
+        } else {
+            $this->error(__("Couldn't find mailchimp-newsletter admin page."));
+        }
+    }
+
+    static public function getModuleConfigInputfields(array $data) {
+        $data = array_merge(self::$defaults, $data);
+
+        $fields = new InputfieldWrapper();
+        $modules = wire("modules");
+
+        $field = $modules->get("InputfieldText");
+        $field->attr('name', 'apikey');
+        $field->attr('size', 40);
+        $field->attr('value', $data['apikey']);
+        $field->label = "MailChimp API Key";
+        $fields->append($field);
+
+        $field = $modules->get("InputfieldText");
+        $field->attr('name', 'newsletter_parent_id');
+        $field->attr('size', 10);
+        $field->attr('value', $data['newsletter_parent_id']);
+        $field->label = "Newsletter Parent Page ID";
+        $fields->append($field);
+
+        $field = $modules->get("InputfieldText");
+        $field->attr('name', 'newsletter_template_id');
+        $field->attr('size', 10);
+        $field->attr('value', $data['newsletter_template_id']);
+        $field->label = "Newsletter Template ID you want to be able to select";
+        $field->required = 0;
+        $fields->append($field);
+
+        return $fields;
+    }
+}

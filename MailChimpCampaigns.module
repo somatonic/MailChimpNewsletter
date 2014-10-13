@@ -1,0 +1,949 @@
+<?php
+
+/**
+ * MailChimp Newsletter
+ * Campaign Management
+ *
+ *
+ * ProcessWire 2.x
+ * Copyright (C) 2010 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ * http://www.ryancramer.com
+ *
+ */
+
+
+class MailChimpCampaigns extends Process implements ConfigurableModule {
+
+    /**
+     * getModuleInfo is a module required by all modules to tell ProcessWire about them
+     *
+     * @return array
+     *
+     */
+    public static function getModuleInfo() {
+
+        return array(
+            'title' => 'MailChimp Campaigns',
+            'version' => 1,
+            'summary' => 'Manage MailChimp Campaigns',
+            'author' => "Philipp Urlich 'Soma'",
+            'href' => '',
+            'singular' => true,
+            'permission' => "mailchimp",
+            'requires' => array('MailChimpNewsletter')
+        );
+    }
+
+    static protected $defaults = array(
+
+        );
+
+    public function init() {
+        parent::init();
+        $this->mailchimp = $this->modules->get("MailChimpNewsletter");
+        $this->apikey = $this->mailchimp->apikey;
+        $this->mcapi = $this->mailchimp->mcapi;
+        $this->modules->get("JqueryWireTabs");
+    }
+
+    public function execute(){
+
+        $this->fuel->set('processHeadline', 'Campaigns');
+
+        $retval = $this->mcapi->campaigns(array());
+        if (!$this->_checkErrorMC()){
+            $this->error($this->_("Unable to Pull list of Campaigns!"));
+        }
+
+        if(empty($retval)) {
+            $this->error($this->_("No campaigns found. Create a new campaign first."));
+            $retval = array();
+        }
+
+        $total = "<p>Total: " . $retval['total'] . "</p>";
+
+        // create table object to be rendered
+        $table = $this->_campaignsTable($retval);
+
+
+        // $folders_list = '';
+        // $folders = $this->mcapi->folders();
+        // if (!$this->_checkErrorMC()){
+        //     $this->error($this->_("Unable to Pull list of Folders!"));
+        // }
+        // if(count($folders)){
+        //     $folders_list .= "<ul>";
+        //     foreach($folders as $f){
+        //         $folders_list .= "<li><a href='./?folderid={$f['folder_id']}'>{$f['name']}</a></li>";
+        //     }
+        //     $folders_list .= "</ul>";
+        // }
+
+
+
+        $add = $this->modules->get("InputfieldButton");
+        $add->attr("value",$this->_("Create new Campaign"));
+        $add->attr('class', $add->class . ' head_button_clone');
+        $add->attr('href', "./add/");
+
+        return $table->render() . $add->render() . $folders_list;
+    }
+
+    public function executeEdit() {
+
+        $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Campaigns'));
+        $this->fuel->set('processHeadline', 'Edit Campaign');
+
+        $campaign_id = $this->input->get->id;
+
+        $retval = $this->_getMCCampaign($campaign_id);
+        $form = $this->_buildEditForm($retval['data'][0]);
+        $campaign = $retval['data'][0];
+
+        // save submited form
+        if($this->input->post->submit) {
+
+            $form->email_test->required = 0;
+            $form->processInput($this->input->post);
+            if(!$this->input->post->newsletter_url && !$this->input->post->newsletter_id){
+                $form->newsletter_id->error($this->_('Please select a newsletter page or enter a url below.'));
+            }
+            if(!$form->getErrors()) {
+                // update campaign
+                //$type = 'regular';
+                //$opts['authenticate'] = true;
+                $opts['title'] = $this->input->post->title;
+                $opts['list_id'] = $this->input->post->list_id;
+                //$opts['tracking'] = array('opens' => true, 'html_clicks' => true, 'text_clicks' => false);
+
+                $opts['generate_text'] = true;
+                $opts['subject'] = $this->input->post->subject;
+                $opts['from_email'] = $this->input->post->from_email;
+                $opts['from_name'] = $this->input->post->from_name;
+
+                $newsletter_url = '';
+
+                if($this->input->post->newsletter_id && !$this->input->post->newsletter_url) {
+                    $newsletterpage = $this->pages->get($this->input->post->newsletter_id);
+                    if(!$newsletterpage->id){
+                        $this->error($this->_("Unable to get newsletter PW page, make sure it is published and available via public URL!"));
+                        $this->session->redirect("../");
+                    } else {
+                        $newsletter_url = $newsletterpage->httpUrl;
+                    }
+                }
+                if($this->input->post->newsletter_url) {
+                    $newsletter_url = $this->input->post->newsletter_url;
+                }
+                $opts['content'] = array('url' => $newsletter_url);
+
+                // update campaign on MailChimp
+                foreach($opts as $key => $v){
+                    $this->_updateMCCampaign($campaign_id,$key,$v);
+                }
+                $this->message($this->_('Campaign updated'));
+
+                // update campaign in DB for newsletter page id
+                $this->_update($this->input->post->newsletter_id, $this->input->post->newsletter_url, $campaign_id, $this->input->post->list_id);
+
+                // get campaign again with updated email list values
+                $retval = $this->_getMCCampaign($campaign_id);
+                $form = $this->_buildEditForm($retval['data'][0]);
+            }
+        }
+
+        // send test email
+        if($this->input->post->sendtest){
+            // process form
+            $form->processInput($this->input->post);
+            // if no error
+            if(!$form->getErrors()){
+
+                if(strpos($form->get("email_test")->value, ",") !== false){
+                    $emails = explode(",", $form->get("email_test")->value);
+                } else {
+                    $emails = array($form->get("email_test")->value);
+                }
+                $retval = $this->mcapi->campaignSendTest($campaign_id, $emails);
+                if(!$this->_checkErrorMC()){
+                    $this->error($this->_("Unable to Send Test Campaign!"));
+                } else {
+                    foreach($emails as $email){
+                        $this->message(sprintf($this->_("Campaign Test sent to '%s'!"), $email));
+
+                    }
+                }
+                $this->session->redirect($page->url . "?id=" . $campaign_id);
+            }
+        }
+
+        // send campaign email
+        if($this->input->post->sendcampaign){
+            $form->email_test->required = 0;
+            $form->processInput($this->input->post);
+            if(!$form->getErrors()){
+                $emails = array($this->input->post->email_test);
+                $retval = $this->mcapi->campaignSendNow($campaign_id);
+
+                $newsletter_id = $this->_getNewsletterPageID($campaign_id);
+                $newsletter_page = $this->pages->get((int)$newsletter_id);
+
+                if(!$this->_checkErrorMC()){
+                    $this->error($this->_("Unable to Send Campaign!"));
+                } else {
+                    if($newsletter_page->id){
+                        $newsletter_page->sent = 1;
+                        $newsletter_page->save();
+                    }
+                    $this->message($this->_("Campaign Sent!"));
+                }
+            }
+        }
+
+        // delete campaign email
+        if($this->input->post->deletecampaign){
+            $this->mcapi->campaignDelete($campaign_id);
+            if(!$this->_checkErrorMC()){
+                $this->error($this->_("Unable to delete Campaign!"));
+            } else {
+                $this->message($this->_("Campaign deleted!"));
+                $this->_delete($campaign_id);
+                $this->session->redirect('../');
+            }
+        }
+
+
+        // render form
+        return $form->render();
+    }
+
+    public function executeAdd() {
+
+        $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Campaigns'));
+        $this->fuel->set('processHeadline', 'Create Campaign');
+
+        if($this->input->post->submit) {
+            $form = $this->_buildAddForm();
+            $form->processInput($this->input->post);
+            if(!$this->input->post->newsletter_url && !$this->input->post->newsletter_id){
+                $form->newsletter_id->error($this->_('Please select a newsletter page or enter a url below.'));
+            }
+
+            if(!$form->getErrors()){
+
+                // create new campaign
+                $type = 'regular';
+                $opts['authenticate'] = true;
+                $opts['title'] = $this->input->post->title;
+                $opts['list_id'] = $this->input->post->list_id;
+                $opts['tracking'] = array('opens' => true, 'html_clicks' => true, 'text_clicks' => false);
+
+                $opts['generate_text'] = true;
+                $opts['subject'] = $this->input->post->subject;
+                $opts['from_email'] = $this->input->post->from_email;
+                $opts['from_name'] = $this->input->post->from_name;
+
+                $newsletter_url = '';
+
+                if($this->input->post->newsletter_id) {
+                    $newsletterpage = $this->pages->get($this->input->post->newsletter_id);
+                    if(!$newsletterpage->id){
+                        $this->error($this->_("Unable to get newsletter PW page, make sure it is published and available via public URL!"));
+                        $this->session->redirect("../");
+                    } else {
+                        $content = array('url'=>$newsletterpage->httpUrl);
+                    }
+                }
+                if($this->input->post->newsletter_url) {
+                    $content = array('url'=>$this->input->post->newsletter_url);
+                }
+
+                $campaign_id = $this->mcapi->campaignCreate($type, $opts, $content);
+                if(!$this->_checkErrorMC()){
+                    $this->error($this->_("Unable to create campaign on MailChimp!"));
+                    $this->session->redirect("../");
+                } else {
+                    $this->_insert($this->input->post->newsletter_id,$this->input->post->newsletter_url,$campaign_id,$this->input->post->list_id);
+                    $this->message(sprintf($this->_("New campaign '%s' created on MailChimp"),$this->input->post->title));
+                    $this->session->redirect("../edit/?id=$campaign_id");
+                }
+
+            }
+        } else {
+            $form = $this->_buildAddForm();
+        }
+
+        return $form->render();
+    }
+
+    public function executeStats(){
+
+        $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Campaigns'));
+
+        $campaign_id = $this->input->get('id');
+        $data = $this->_getMCCampaign($campaign_id);
+        $title = sprintf($this->_('Campaign Stats: %s'),$data['data'][0]['title']);
+        $this->fuel->set('processHeadline', $title);
+
+
+        /**
+         * Tab Reports
+         */
+
+        $retval = $this->mcapi->campaignStats($campaign_id);
+        if(!$this->_checkErrorMC()){
+            $this->error($this->_("Could not retrieve Campaign Stats!"));
+        }
+
+        $form = $this->modules->get("InputfieldForm");
+        $form->attr("id+name","CampaignStatsForm");
+        $form->attr("action","#");
+        $form->attr('id',$this->className());
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . $this->_("CampaignStats1"));
+        $wrapper->attr("title", $this->_("Sent and opened"));
+        $field = $this->modules->get("InputfieldMarkup");
+        $field->value .= "<div class='MC_stats'>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['emails_sent']}</span>Emails sent</p>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['opens']}</span>Opens</p>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['unique_opens']}</span>Unique opens</p>";
+        $field->value .= "<p class='MC_stat'><span class='date'>" . date("d-m-Y H:i:s", strtotime($retval['last_open'])) . "</span>Last opened<br/></p>";
+
+        $field->value .= "</div>";
+        $wrapper->add($field);
+        $form->add($wrapper);
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . $this->_("CampaignStats2"));
+        $wrapper->attr("title", $this->_("Clicks and bounces"));
+        $field = $this->modules->get("InputfieldMarkup");
+        $field->value .= "<div class='MC_stats'>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['clicks']}</span>User clicks</p>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['unique_clicks']}</span>Unique clicks</p>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['hard_bounces']}</span>Hard bounces</p>";
+        $field->value .= "<p class='MC_stat'><span>{$retval['soft_bounces']}</span>Soft bounces</p>";
+        $field->value .= "</div>";
+        $wrapper->add($field);
+        $form->add($wrapper);
+
+        return $form->render();
+    }
+
+    public function executeCampaigncontent(){
+        $id = $this->input->get('id');
+        $html = $this->input->get('html');
+        $api = new MCAPI($this->apikey);
+        $content = $api->campaignContent($id);
+        if($html == 1) {
+            echo $content['html'];
+        } else {
+            echo nl2br($content['text']);
+        }
+        exit();
+    }
+
+
+    /**
+     * get all campaigns
+     * @return MarkupAdminDataTable table of campaigns
+     */
+    private function _campaignsTable(Array $campaigns){
+
+        $table = $this->modules->get("MarkupAdminDataTable");
+        $table->headerRow(array("Title", "List", "Status", "Type", "Send Time", "Sent to", "ID", "Folder", "Action"));
+
+        foreach($campaigns['data'] as $ca) {
+
+            if($ca['status'] == 'sent') {
+                $action_name = $this->_("stats");
+                $action = "stats/?id=".$ca['id'];
+            } else if($ca['status'] == 'sending'){
+                $action_name = $this->_("sending...");
+                $action = null;
+            } else {
+                $action_name = $this->_("edit");
+                $action = "edit/?id=".$ca['id'];
+            }
+
+            $lists = $this->_getList($ca['list_id']);
+            $list_name = $lists[0]['name'];
+
+            $folders = $this->mcapi->folders();
+            $arrkey = array_search($ca['folder_id'], $folders);
+            $folder = $folders[$arrkey];
+
+            $table->row(array(
+                $ca['title'] => "$action",
+                $list_name,
+                $ca['status'],
+                $ca['type'],
+                $ca['send_time'],
+                $ca['emails_sent'],
+                $ca['id'],
+                $folder['name'],
+                $action_name => "$action"
+            ));
+        }
+
+        return $table;
+    }
+
+    protected function _insert($newsletter_id, $newsletter_url, $campaign_id, $list_id) {
+        $newsletter_url = $this->sanitizer->url($newsletter_url);
+        if($newsletter_id == 0) $newsletter_id = "NULL";
+        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, newsletter_url, list_id, created)
+                VALUES ('$campaign_id',$newsletter_id,'$newsletter_url','$list_id',now())";
+        $result = $this->db->query($query);
+        $this->message($this->_("New Campaign inserted/updated"));
+        return mysqli_insert_id($this->db);
+    }
+
+    protected function _update($newsletter_id, $newsletter_url, $campaign_id, $list_id) {
+        $newsletter_url = $this->sanitizer->url($newsletter_url);
+        if($newsletter_id == 0) $newsletter_id = "NULL";
+        $values = "newsletter_id=" . $newsletter_id . ",";
+        $values .= "newsletter_url='" . $newsletter_url . "',";
+        $values .= "list_id='" . $list_id . "'";
+        $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
+        $result = $this->db->query($query);
+        $this->message($this->_("Campaign updated"));
+        return $result;
+    }
+
+    protected function _delete($campaign_id) {
+        $query = "DELETE FROM {$this->className} WHERE campaign_id='$campaign_id'";
+        $result = $this->db->query($query);
+        $this->message($this->_("Campaign deleted from DB"));
+        return $result;
+    }
+
+
+    protected function _buildEditForm($data = array()) {
+
+        $this->modules->get('JqueryFancybox');
+
+        $campaign_id = $data['id'];
+        $newsletter_id = $this->_getNewsletterPageID($campaign_id);
+        $newsletter_title = $this->pages->get($newsletter_id)->title;
+        $newsletter_url = $this->_getNewsletterURL($campaign_id);
+
+        $form = $this->modules->get("InputfieldForm");
+        $form->action = "../edit/?id=$campaign_id";
+        $form->method = "post";
+        $form->attr('id',$this->className());
+
+        $field = $this->modules->get('InputfieldHidden');
+        $field->attr('name', 'id');
+        $field->attr('value', $campaign_id);
+        $form->append($field);
+
+
+        /**
+         * Tab Settings
+         */
+        $wrapper_settings = new InputfieldWrapper();
+        $wrapper_settings->attr("id", $this->className() . "Settings");
+        $wrapper_settings->attr("title", $this->_("Settings"));
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"title");
+        $field->label = $this->_("Title");
+        $field->description = $this->_("Please enter a title for the newsletter");
+        $field->required = 1;
+        $field->attr('value', $data['title']);
+        $wrapper_settings->add($field);
+
+        // list select
+        $field = $this->modules->get("InputfieldSelect");
+        $field->attr('id+name',"list_id");
+        $field->label = $this->_("Email List");
+        $field->description = $this->_("Please choose an email list.");
+        $field->required = 1;
+        $list = $this->_getLists();
+        if(is_array($list)){
+            $options = array('' => '');
+            foreach($list as $l){
+                $options[$l['id']] = $l['name'];
+            }
+            $field->addOptions($options);
+        }
+        $field->attr('value',$data['list_id']);
+        $wrapper_settings->add($field);
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"subject");
+        $field->label = $this->_("Email Subject");
+        $field->description = $this->_("Subject for your campaign message.");
+        $field->required = 1;
+        $field->attr('value',$data['subject']);
+        $wrapper_settings->add($field);
+
+        $field = $this->modules->get("InputfieldEmail");
+        $field->attr('id+name',"from_email");
+        $field->label = $this->_("From Email Address");
+        $field->description = $this->_("the From: email address for your campaign message.");
+        $field->required = 1;
+        $field->attr('value',$data['from_email']);
+        $wrapper_settings->add($field);
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"from_name");
+        $field->label = $this->_("From Name");
+        $field->description = $this->_("the From: name for your campaign message (not an email address).");
+        $field->required = 1;
+        $field->attr('value',$data['from_name']);
+        $wrapper_settings->add($field);
+
+
+        /**
+         * Tab Content
+         */
+
+        $wrapper_content = new InputfieldWrapper();
+        $wrapper_content->attr("id", $this->className() . "EmailContent");
+        $wrapper_content->attr("title", $this->_("Email Content"));
+
+
+        // newletter page
+        $field = $this->modules->get("InputfieldPageListSelect");
+        $field->attr('id+name',"newsletter_id");
+        $field->label = $this->_("Newsletter Page");
+        $editLink = '';
+        if($newsletter_id) $editLink = "< [$newsletter_title](/processwire/page/edit/?id=$newsletter_id) >";
+        $field->description = sprintf($this->_('Choose a newsletter from the list. %s'), $editLink);
+        $field->parent_id = $this->mailchimp->newsletter_parent_id;
+        $field->derefAsPage = 0;
+        $field->labelFieldName = "title";
+        $page_required = 1;
+        // make the field required only if newsletter_url is not entered
+        if(!$this->mailchimp->newsletter_parent_id){
+            $this->message($this->_("Newsletter Parent Page ID not specified in MailChimpNewsletter module settings. You still can alternatively enter a URL below."));
+            $page_required = 0;
+        }
+        if($newsletter_url || $this->input->post->newsletter_url) $page_required = 0;
+        $field->required = $page_required;
+        $field->attr('value', $newsletter_id);
+        $wrapper_content->add($field);
+
+        // newsletter url
+        $field = $this->modules->get("InputfieldURL");
+        $field->attr('id+name',"newsletter_url");
+        $field->label = $this->_("Newsletter URL");
+        $field->description = $this->_("Enter a public URL for the content alternatively.");
+        $url_required = 0;
+        // make the field dependent on the page list select
+        if(!$this->mailchimp->newsletter_parent_id) $url_required = 1;
+        if(!$this->input->post->newsletter_id) {
+            if($this->input->post->newsletter_url) $url_required = 1;
+        }
+        $field->required = $url_required;
+        $field->attr('value', $newsletter_url);
+        $wrapper_content->add($field);
+
+
+
+        // $field = $this->modules->get("InputfieldPage");
+        // $field->inputfield = $this->modules->get("InputfieldPageListSelect");
+        // $field->attr('id+name',"newsletter_id");
+        // $field->label = $this->_("Newsletter Page");
+        // $field->description = sprintf($this->_('Choose a newsletter from the list. Edit < [%1$s](/processwire/page/edit/?id=%2$s) >'),$newsletter_title,$newsletter_id);
+        // $field->required = 1;
+        // $field->parent_id = $this->mailchimp->newsletter_parent_id;
+        // $field->derefAsPage = 0;
+        // $field->labelFieldName = "title";
+        // $field->attr('value', $newsletter_id);
+        // $wrapper_content->add($field);
+
+
+
+
+
+        $url = $this->pages->get("name=mailchimp-campaigns")->url;
+
+        $preview = $this->modules->get("InputfieldMarkup");
+        $preview->label = $this->_("Preview");
+        $preview->description = $this->_("Preview the generated newsletter that will be sent");
+        $preview->attr('id',"MC_NewsletterPreview");
+
+        $button = $this->modules->get("InputfieldButton");
+        $button->attr("id", "MC_NewsletterPreviewHtml");
+        $button->attr("value",$this->_("HTML Email"));
+        $button->attr('href',"{$url}campaigncontent/?id=$campaign_id&amp;html=1&iframe&modal=1");
+        $preview->value = $button->render();
+
+        $button = $this->modules->get("InputfieldButton");
+        $button->attr("id", "MC_NewsletterPreviewText");
+        $button->attr("value",$this->_("Text Email"));
+        $button->attr('href',"{$url}campaigncontent/?id=$campaign_id&amp;html=0&iframe&modal=1");
+        $preview->value .= $button->render();
+
+        $wrapper_content->add($preview);
+
+
+        /**
+         * Tab Email Lists
+         */
+        $wrapper_list = new InputfieldWrapper();
+        $wrapper_list->attr("id", $this->className() . "EmailList");
+        $wrapper_list->attr("title", $this->_("Email List"));
+
+        $preview = $this->modules->get("InputfieldMarkup");
+
+        $retval = $this->mcapi->listMembers($data["list_id"], "subscribed", null, 0 , 5000);
+        if(!$this->_checkErrorMC()){
+            $this->error($this->error("Unable to load lists members!"));
+        } else {
+            $preview->value .= sprintf($this->_("Total member count: %s"),$retval["total"]);
+            $preview->value .= " | ";
+            $preview->value .= sprintf($this->_("Viewing: %s"),sizeof($retval["data"])) . "<br/>";
+            $table = $this->modules->get("MarkupAdminDataTable");
+            $table->headerRow(array("Email","Last modified"));
+            foreach($retval["data"] as $member){
+                $table->row(array($member["email"],$member["timestamp"]));
+            }
+            $preview->value .= $table->render();
+        }
+
+        $wrapper_list->add($preview);
+
+
+        /**
+         * Tab Send Test
+         */
+        $wrapper_test = new InputfieldWrapper();
+        $wrapper_test->attr("id", $this->className() . "SendTest");
+        $wrapper_test->attr("title", $this->_("Send Test"));
+
+        $fieldset = $this->modules->get("InputfieldFieldset");
+        $fieldset->label = $this->_("Send Test Email");
+
+        $field = $this->modules->get("InputfieldText");
+        $field->label = $this->_("Test Email Address");
+        $field->description = $this->_("Enter multiple E-Mails comma separated");
+        $field->attr("id+name","email_test");
+        $field->required = 1;
+        $fieldset->append($field);
+
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->value = $this->_("Send Test");
+        $field->attr("id+name", "sendtest");
+
+        $fieldset->append($field);
+        $wrapper_test->add($fieldset);
+
+
+        /**
+         * Tab Send
+         */
+        $wrapper_send = new InputfieldWrapper();
+        $wrapper_send->attr("id", $this->className() . "SendCampaign");
+        $wrapper_send->attr("title", $this->_("Send Campaign"));
+
+        $fieldset = $this->modules->get("InputfieldFieldset");
+        $fieldset->label = $this->_("Send Campaign");
+
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->value = $this->_("Send Campaign now");
+        $field->attr("id+name", "sendcampaign");
+
+        $fieldset->append($field);
+        $wrapper_send->add($fieldset);
+
+
+        /**
+         * Tab Delete Campaign
+         */
+
+        $wrapper_delete = new InputfieldWrapper();
+        $wrapper_delete->attr("id", $this->className() . "DeleteCampaign");
+        $wrapper_delete->attr("title", $this->_("Delete Campaign"));
+
+        $fieldset = $this->modules->get("InputfieldFieldset");
+        $fieldset->label = $this->_("Delete Campaign");
+
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->value = $this->_("Delete Campaign now");
+        $field->attr("id+name", "deletecampaign");
+
+        $fieldset->append($field);
+        $wrapper_delete->add($fieldset);
+
+
+        /**
+         * Add wrappers to form
+         */
+
+        $form->add($wrapper_content);
+        $form->add($wrapper_list);
+        $form->add($wrapper_settings);
+
+
+        if($data['status'] != 'sent' && $data['status'] != 'sending') {
+            $form->add($wrapper_test);
+            $form->add($wrapper_send);
+            $form->add($wrapper_delete);
+
+        } else if($data['status'] == 'sent'){
+            /**
+             * Tab Reports
+             */
+            $retval = $this->mcapi->campaignStats($campaign_id);
+            if(!$this->_checkErrorMC()){
+                $this->error($this->_("Could not retrieve Campaign Stats!"));
+            }
+            $wrapper_stats = new InputfieldWrapper();
+            $wrapper_stats->attr("id", $this->className() . $this->_("CampaignStats"));
+            $wrapper_stats->attr("title", $this->_("Campaign Stats"));
+
+            $fieldset = $this->modules->get("InputfieldFieldset");
+            $fieldset->label = $this->_("Campaign Stats");
+
+            $field = $this->modules->get("InputfieldMarkup");
+            $field->value = print_r($retval);
+
+            $fieldset->append($field);
+            $wrapper_stats->add($fieldset);
+            $form->add($wrapper_stats);
+        }
+
+
+
+
+        /**
+         * update button
+         */
+        $save = $this->modules->get("InputfieldSubmit");
+        $save->value = $this->_("Update Campaign");
+        $save->attr("id+name", "submit");
+        $save->attr("class", $save->class . " head_button_clone");
+
+        $form->add($save);
+
+        return $form;
+    }
+
+    private function _buildAddForm() {
+
+        $form = $this->modules->get("InputfieldForm");
+        $form->action = "../add/";
+        $form->method = "post";
+        $form->attr('id',$this->className());
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"title");
+        $field->label = $this->_("Title");
+        $field->description = $this->_("Please enter a title for the newsletter.");
+        $field->required = 1;
+        $form->add($field);
+
+
+        $field = $this->modules->get("InputfieldSelect");
+        $field->attr('id+name',"list_id");
+        $field->label = $this->_("Email List");
+        $field->description = $this->_("Please choose an email list.");
+        $field->required = 1;
+        $list = $this->_getLists();
+        if(is_array($list)){
+            $options = array('' => '');
+            foreach($list as $l){
+                $options[$l['id']] = $l['name'];
+            }
+            $field->addOptions($options);
+        }
+        $form->add($field);
+
+
+        // select newletter page
+        if($this->mailchimp->newsletter_parent_id){
+            $field = $this->modules->get("InputfieldPageListSelect");
+            $field->attr('id+name',"newsletter_id");
+            $field->label = $this->_("Newsletter Page");
+            $field->description = sprintf($this->_("Choose a newsletter page from the list. Create them in the Newsletters folder [here](/processwire/page/?open=%s)"),$this->mailchimp->newsletter_parent_id);
+            $field->parent_id = $this->mailchimp->newsletter_parent_id;
+            $field->template_id = 70;
+            $field->derefAsPage = 0;
+            $field->labelFieldName = "title";
+            $page_required = 1;
+            // make the field required only if newsletter_url is not entered
+            if($this->input->post->newsletter_url) $page_required = 0;
+            $field->required = $page_required;
+            $form->add($field);
+        } else {
+            $this->message($this->_("Newsletter Parent Page ID not specified in MailChimpNewsletter module settings. You still can alternatively enter a URL below."));
+        }
+
+        $field = $this->modules->get("InputfieldURL");
+        $field->attr('id+name',"newsletter_url");
+        $field->label = $this->_("Newsletter URL");
+        $field->description = $this->_("Enter a public URL for the email content.");
+        $url_required = 0;
+        // make the field dependent on the page list select
+        if(!$this->mailchimp->newsletter_parent_id) $url_required = 1;
+        if(!$this->input->post->newsletter_id) {
+            if($this->input->post->newsletter_url) $url_required = 1;
+        }
+        $field->required = $url_required;
+        $form->add($field);
+
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"subject");
+        $field->label = $this->_("Email Subject");
+        $field->description = $this->_("Subject for your campaign message.");
+        $field->required = 1;
+        $form->add($field);
+
+        $field = $this->modules->get("InputfieldEmail");
+        $field->attr('id+name',"from_email");
+        $field->label = $this->_("From Email Address");
+        $field->description = $this->_("the From: email address for your campaign message.");
+        $field->required = 1;
+        $form->add($field);
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('id+name',"from_name");
+        $field->label = $this->_("From Name");
+        $field->description = $this->_("the From: name for your campaign message (not an email address).");
+        $field->required = 1;
+        $form->add($field);
+
+
+        $save = $this->modules->get("InputfieldSubmit");
+        $save->value = $this->_("Create Campaign");
+        $save->attr('id+name', "submit");
+        $save->attr('class', $save->class . ' head_button_clone');
+
+
+        $form->add($save);
+        return $form;
+    }
+
+
+    protected function _getNewsletterPageID($cid) {
+        $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$cid';";
+        $res = $this->db->query($query);
+        $arr = $res->fetch_array();
+        return $arr['newsletter_id'];
+    }
+
+    protected function _getNewsletterURL($cid) {
+        $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$cid';";
+        $res = $this->db->query($query);
+        $arr = $res->fetch_array();
+        return $arr['newsletter_url'];
+    }
+
+    /**
+     * get MailChimp campaign
+     * @param  string $cid campaign id
+     * @return mixed false on error, campaign if successful
+     */
+    protected function _getMCCampaign($cid) {
+        $retval = $this->mcapi->campaigns(array('campaign_id' => $cid),0,1);
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('Unable to retrieve Campaign!'));
+            return false;
+        } else {
+            return $retval;
+        }
+    }
+
+    protected function _updateMCCampaign($cid, $key, $value) {
+        $this->mcapi->campaignUpdate($cid, $key, $value);
+        if(!$this->_checkErrorMC()){
+            $this->error($this->_('Campaign update failed'));
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    protected function _getLists(){
+        $retval = $this->mcapi->lists();
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('"Unable to load lists!"'));
+            return false;
+        } else {
+            return $retval['data'];
+        }
+    }
+
+    protected function _getList($list_id){
+        $retval = $this->mcapi->lists(array('list_id' => $list_id),0,1);
+        if(!$this->_checkErrorMC()) {
+            $this->error($this->_('"Unable to load list!"'));
+            return false;
+        } else {
+            return $retval['data'];
+        }
+    }
+
+    protected function _checkErrorMC($msg = '') {
+        if($this->mcapi->errorCode) {
+            $this->error(sprintf($this->_("ErrorCode = %s"), $this->mcapi->errorCode));
+            $this->error(sprintf($this->_("ErrorMessage = %s"), $this->mcapi->errorMessage));
+            return false;
+        }
+        return true;
+    }
+
+    public function install() {
+
+        // db schema for saving newsletter
+        $sql = <<< _END
+        CREATE TABLE {$this->className} (
+            id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            newsletter_id INT NULL,
+            newsletter_url VARCHAR(255) NULL,
+            list_id VARCHAR(32) NULL,
+            campaign_id VARCHAR(32) NULL,
+            modified TIMESTAMP NOT NULL default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP,
+            created TIMESTAMP DEFAULT '0000-00-00 00:00:00',
+            PRIMARY KEY (`id`)
+        )
+        ENGINE = MyISAM DEFAULT CHARSET=utf8;
+_END;
+
+        $this->db->query($sql);
+
+    }
+
+    public function uninstall() {
+        $admin = $this->pages->find("name=mailchimp-campaigns")->first();
+        if($admin->id && $this->pages->delete($admin)) {
+            $this->message(__("Deleted mailchimp-campaigns admin page."));
+        } else {
+            $this->error(__("Couldn't find mailchimp-campaigns admin page."));
+        }
+
+        $this->db->query("DROP TABLE {$this->className}");
+
+    }
+
+    public static function getModuleConfigInputfields(array $data) {
+        // $data = array_merge(self::$defaults, $data);
+
+        // $fields = new InputfieldWrapper();
+        // $modules = wire("modules");
+
+        // $field = $modules->get("InputfieldText");
+        // $field->attr('name', 'apikey');
+        // $field->attr('size', 40);
+        // $field->attr('value', $data['apikey']);
+        // $field->label = "MailChimp API Key";
+        // $fields->append($field);
+
+        // $field = $modules->get("InputfieldText");
+        // $field->attr('name', 'remoteurl');
+        // $field->attr('size', 0);
+        // $field->attr('value', $data['remoteurl']);
+        // $field->label = "URL to webservice";
+        // $fields->append($field);
+
+        // return $fields;
+    }
+}
