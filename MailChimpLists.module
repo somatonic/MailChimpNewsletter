@@ -27,39 +27,35 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Lists',
-            'version' => 1,
+            'version' => 2,
             'summary' => 'Manage MailChimp Lists',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
             'singular' => true,
             'permission' => "mailchimp",
+            'permissions' => array("mailchimp" => "MailChimp Newsletter"),
             'requires' => array('MailChimpNewsletter')
         );
     }
 
-    static protected $defaults = array(
 
-        );
 
     public function init() {
         parent::init();
+        $this->modules->get("JqueryWireTabs");
         $this->mailchimp = $this->modules->get("MailChimpNewsletter");
         $this->apikey = $this->mailchimp->apikey;
-        $this->mcapi = $this->mailchimp->mcapi;
-        $this->modules->get("JqueryWireTabs");
     }
 
     public function execute(){
+
+        $out = "";
+
         $this->fuel->set('processHeadline', 'Lists');
+        $out .= "<h2>" . $this->_("Lists") . "</h2>";
+        $retval = $this->mailchimp->_get("lists");
 
-        $retval = $this->mcapi->lists();
-        if ($this->mcapi->errorCode){
-            $out .= $this->_("Unable to load Lists!");
-            $out .= "\n\tCode = ".$this->mcapi->errorCode;
-            $out .= "\n\tMsg = ".$this->mcapi->errorMessage."\n";
-        }
-
-        if(empty($retval)) return $this->error($this->_("No lists found. Create a new list first."));
+       if(empty($retval)) return $this->error($this->_("No lists found. Create a new list first."));
 
         // create table object to be rendered
         $table = $this->_listsTable($retval);
@@ -69,23 +65,38 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $add->attr('class', $add->class . ' head_button_clone');
         $add->attr('href', "./add/");
 
-        return $table->render(); //;. $add->render();
+        $out .= $table->render();
+
+        return $out;
     }
 
-
-    public function executeDelete() {
-        $id = $this->input->get->id;
-        $email = $this->input->get->email;
-        $this->mcapi->listUnsubscribe($id, $email, true, true, true);
-        if(!$this->_checkErrorMC()){
-            $this->error($this->_("Unable to delete E-mail from the list"));
-            $this->session->redirect("../edit/?id=$id");
-        } else {
-            $this->session->redirect("../edit/?id=$id");
-        }
-    }
 
     public function executeAdd() {
+        // TODO?
+    }
+
+
+    public function executeUnsubscribe() {
+        $list_id = $this->input->get->id;
+        $email = $this->input->get->email;
+        $emailHash = md5(strtolower($email));
+        $this->mailchimp->_patch("lists/{$list_id}/members/{$emailHash}", array(
+            "status" => "unsubscribed",
+            ));
+
+        $this->message(sprintf($this->_("Unsubscribed '%s' from the list"), $email));
+        $this->session->redirect("../edit/?id=$list_id");
+
+    }
+
+    public function executeDelete() {
+        $list_id = $this->input->get->id;
+        $email = $this->input->get->email;
+        $emailHash = md5(strtolower($email));
+        $this->mailchimp->_delete("lists/{$list_id}/members/{$emailHash}");
+
+        $this->message(sprintf($this->_("Deleted '%s' from the list"), $email));
+        $this->session->redirect("../edit/?id=$list_id");
 
     }
 
@@ -94,40 +105,85 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Lists'));
         $this->fuel->set('processHeadline', 'Edit List');
 
-        $list_id = $this->input->get->id; // string
+        $list_id = $this->input->get->id;
 
-        $retval = $this->_getMCList($list_id);
-        $form = $this->_buildEditForm($retval['data'][0]);
-        $list = $retval['data'][0];
+        $retval = $this->mailchimp->_get("lists/$list_id");
+        // // print_r($retval);
+
+        $form = $this->_buildEditForm($retval);
 
         // save submited form
         if($this->input->post->submit) {
 
-            $form->email_test->required = 0;
             $form->processInput($this->input->post);
 
             if(!$form->getErrors()) {
 
+                $res = $this->mailchimp->_patch("lists/{$list_id}", array(
+                        "name" => $this->sanitizer->text($form->get("name")->value),
+                        "campaign_defaults" => array(
+                            "subject" => $this->sanitizer->text($form->get("default_subject")->value),
+                            "from_email" => $this->sanitizer->text($form->get("default_from_email")->value),
+                            "from_name" => $this->sanitizer->text($form->get("default_from_name")->value),
+                            ),
+                        "notify_on_subscribe" => $this->sanitizer->text($form->get("notify_on_subscribe")->value),
+                        "notify_on_unsubscribe" => $this->sanitizer->text($form->get("notify_on_unsubscribe")->value),
+                    ));
+                if($res){
+                    $this->message("List saved");
+                }
             }
         }
-        if($this->input->post->subscribe){
+
+        if($this->input->post->subscribe) {
+
             $form->email->required = 1;
             $form->email_type->required = 1;
             $form->processInput($this->input->post);
 
             if(!$form->getErrors()) {
-                $id = $this->input->post->id;
-                $email = $this->input->post->email;
-                $type = $this->input->post->email_type;
-                $this->mcapi->listSubscribe($id, $email, null, $type, false);
-                if(!$this->_checkErrorMC()){
-                    $this->error($this->_("Unable to subscribe E-mail to MailChimp"));
-                } else {
-                    $this->Message("Added E-mail address $email to the list.");
+
+                $email = $this->sanitizer->email($form->get("email")->value);
+                $email_type = $this->sanitizer->text($form->get("email_type")->value);
+
+                $language = "";
+                if($form->get("language")->value){
+                    $language = $this->sanitizer->text($form->get("language")->value);
                 }
+
+                $merge_fields = array();
+                if($retval['stats']['merge_field_count']){
+                    $mergeFields = $form->find("name^=merge_");
+
+                    foreach($mergeFields as $f){
+                        if($f->value == "") continue;
+                        $fieldClass = get_class($f);
+                        $mergeTag = str_replace("merge_", "", $f->name);
+                        $fvalue = $f->value;
+                        if($f instanceof InputfieldSelect){
+                            $fvalue = $f->value;
+                        }
+                        $merge_fields[$mergeTag] = $fvalue;
+                    }
+                }
+
+                $res = $this->mailchimp->_post("lists/{$list_id}/members", array(
+                        "email_address" => $email,
+                        "email_type" => $email_type,
+                        "status" => "subscribed", // todo
+                        "language" => $language,
+                        "merge_fields" => $merge_fields,
+                    ));
+
+                if($res){
+                    $this->message(sprintf($this->_("Subscribed '%s' to list"), $email));
+                }
+
+                $this->session->redirect("../edit/?id=$list_id");
             }
 
         }
+
 
         return $form->render();
     }
@@ -148,11 +204,11 @@ class MailChimpLists extends Process implements ConfigurableModule {
                           "Default From Name",
                           "Default From Email",
                           "Default Subject",
-                          "Language",
                           "ID",
                           "Action"
                         ));
-        foreach($lists['data'] as $ca) {
+
+        foreach($lists['lists'] as $ca) {
             $action_name = $this->_("edit");
             $action = "edit/?id=".$ca['id'];
 
@@ -161,10 +217,9 @@ class MailChimpLists extends Process implements ConfigurableModule {
                 $ca['stats']['member_count'],
                 $ca['date_created'],
                 $ca['email_type_option'],
-                $ca['default_from_name'],
-                $ca['default_from_email'],
-                $ca['default_subject'],
-                $ca['default_language'],
+                $ca['campaign_defaults']['from_name'],
+                $ca['campaign_defaults']['from_email'],
+                $ca['campaign_defaults']['subject'],
                 $ca['id'],
                 $action_name => $action
             ));
@@ -173,23 +228,22 @@ class MailChimpLists extends Process implements ConfigurableModule {
         return $table;
     }
 
-    protected function _listInsert($newsletter_id, $campaign_id) {
-        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, created) VALUES ('$campaign_id',$newsletter_id,now())";
-        $result = $this->db->query($query);
-        $this->message($this->_("Campaign inserted into DB"));
-        return mysqli_insert_id($this->db);
+    // protected function _listInsert($newsletter_id, $campaign_id) {
+    //     $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, created) VALUES ('$campaign_id',$newsletter_id,now())";
+    //     $result = $this->db->query($query);
+    //     $this->message($this->_("Campaign inserted into DB"));
+    //     return mysqli_insert_id($this->db);
 
-    }
+    // }
 
-    protected function _listUpdate($newsletter_id, $campaign_id) {
-        $values = "newsletter_id=" . $newsletter_id;
-        $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
-        $result = $this->db->query($query);
-        $this->message($this->_("Campaign updated in DB"));
-        return $result;
+    // protected function _listUpdate($newsletter_id, $campaign_id) {
+    //     $values = "newsletter_id=" . $newsletter_id;
+    //     $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
+    //     $result = $this->db->query($query);
+    //     $this->message($this->_("Campaign updated in DB"));
+    //     return $result;
 
-    }
-
+    // }
 
 
     protected function _buildEditForm($data = array()) {
@@ -197,6 +251,8 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $this->modules->get('JqueryFancybox');
 
         $list_id = $data['id'];
+
+        print_r($data);
 
         $form = $this->modules->get("InputfieldForm");
         $form->action = "../edit/?id=$list_id";
@@ -217,14 +273,14 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $wrapper_subscription->attr("title", $this->_("Subscription Forms"));
 
         $field = $this->modules->get("InputfieldMarkup");
-        $field->attr('id+name',"subscribe_url_short");
+        // $field->attr('id+name',"subscribe_url_short");
         $field->label = $this->_("Subscribe short URL");
         $field->description = $this->_("Use this URL to let users subscribe to this list");
         $field->value = "<a href='{$data["subscribe_url_short"]}'>{$data["subscribe_url_short"]}</a>";
         $wrapper_subscription->add($field);
 
         $field = $this->modules->get("InputfieldMarkup");
-        $field->attr('id+name',"subscribe_url_long");
+        // $field->attr('id+name',"subscribe_url_long");
         $field->label = $this->_("Subscribe long URL");
         $field->description = $this->_("Use this URL to let users subscribe to this list");
         $field->value = "<a href='{$data["subscribe_url_long"]}'>{$data["subscribe_url_long"]}</a>";
@@ -252,41 +308,76 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $wrapper_settings->attr("title", $this->_("Settings"));
 
         $field = $this->modules->get("InputfieldText");
-        $field->attr('id+name',"name");
+        $field->attr('name',"name");
         $field->label = $this->_("Name");
         $field->description = $this->_("Please enter a name for the list");
         $field->required = 1;
         $field->attr('value', $data['name']);
         $wrapper_settings->add($field);
 
+
+        $fieldset = $this->modules->InputfieldFieldset;
+        $fieldset->label = $this->_("Campaign defaults");
+
         $field = $this->modules->get("InputfieldText");
-        $field->attr('id+name',"default_subject");
-        $field->label = $this->_("Default Email Subject");
-        $field->description = $this->_("Subject for your campaign message.");
-        $field->required = 1;
-        $field->attr('value',$data['default_subject']);
-        $wrapper_settings->add($field);
+        $field->attr('name',"default_subject");
+        $field->label = $this->_("'subject line'");
+        $field->description = $this->_("Email subject for your campaign message. Keep it relevant and non-spammy.");
+        $field->description .= " " . $this->_("[Infos](http://kb.mailchimp.com/campaigns/previews-and-tests/best-practices-for-email-subject-lines)");
+        $field->required = 0;
+        $field->maxlength = 150;
+        $field->attr('value', $data['campaign_defaults']['subject']);
+        $fieldset->add($field);
 
         $field = $this->modules->get("InputfieldEmail");
-        $field->attr('id+name',"default_from_email");
-        $field->label = $this->_("Default From Email Address");
-        $field->description = $this->_("the From: email address for your campaign message.");
-        $field->required = 1;
-        $field->attr('value',$data['default_from_email']);
-        $wrapper_settings->add($field);
+        $field->attr('name',"default_from_email");
+        $field->label = $this->_("'from' email");
+        $field->description = $this->_("This is the address people will send replies to. Make sure someone actually checks this email account.");
+        $field->notes = $this->_("Some email services block spam by responding to emails with a challenge question that asks the sender to complete a simple task that proves they are not a spam bot. If the reply-to email address you provide is not frequently checked, you could miss these challenge response emails, and therefore decrease your delivery rate.");
+        $field->required = 0;
+        $field->maxlength = 100;
+        $field->attr('value', $data['campaign_defaults']['from_email']);
+        $fieldset->add($field);
 
         $field = $this->modules->get("InputfieldText");
-        $field->attr('id+name',"default_from_name");
-        $field->label = $this->_("Default From Name");
-        $field->description = $this->_("the From: name for your campaign message (not an email address).");
-        $field->required = 1;
-        $field->attr('value',$data['default_from_name']);
-        $wrapper_settings->add($field);
+        $field->attr('name',"default_from_name");
+        $field->label = $this->_("'from name'");
+        $field->notes = $this->_("This is the name your emails will come from. Use something your subscribers will instantly recognize, like your company name.");
+        $field->required = 0;
+        $field->maxlength = 100;
+        $field->attr('value', $data['campaign_defaults']['from_name']);
+        $fieldset->add($field);
+
+        $wrapper_settings->add($fieldset);
+
+        $fieldset = $this->modules->InputfieldFieldset;
+        $fieldset->label = $this->_("New subscriber notifications");
+        $fieldset->description = $this->_("Get quick email alerts when subscribers join or leave this list (not recommended for large lists).");
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('name',"notify_on_subscribe");
+        $field->label = $this->_("Email subscribe notifications to'");
+        $field->notes = $this->_("Additional email addresses must be separated by a comma.");
+        $field->required = 0;
+        $field->maxlength = 100;
+        $field->attr('value', $data['notify_on_subscribe']);
+        $fieldset->add($field);
+
+        $field = $this->modules->get("InputfieldText");
+        $field->attr('name',"notify_on_unsubscribe");
+        $field->label = $this->_("Email unsubscribe notifications to'");
+        $field->notes = $this->_("Additional email addresses must be separated by a comma.");
+        $field->required = 0;
+        $field->maxlength = 100;
+        $field->attr('value', $data['notify_on_unsubscribe']);
+        $fieldset->add($field);
+
+        $wrapper_settings->add($fieldset);
 
 
 
         /**
-         * Tab Email Lists
+         * Tab Emails
          */
         $wrapper_list = new InputfieldWrapper();
         $wrapper_list->attr("id", $this->className() . "ListMembers");
@@ -294,28 +385,48 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         $preview = $this->modules->get("InputfieldMarkup");
 
-        $retval = $this->mcapi->listMembers($data["id"], "subscribed", null, 0 , 5000);
-        if(!$this->_checkErrorMC()){
-            $this->error($this->error("Unable to load lists members!"));
-        } else {
-            $preview->value .= sprintf($this->_("Total member count: %s"),$retval["total"]);
-            $preview->value .= " | ";
-            $preview->value .= sprintf($this->_("Viewing: %s"), sizeof($retval["data"])) . "<br/>";
-            $table = $this->modules->get("MarkupAdminDataTable");
-            $table->headerRow(array(
-                              "Email",
-                              "Last modified",
-                              "Actions"
-                        ));
-            foreach($retval["data"] as $member){
-                $table->row(array(
-                            $member["email"],
-                            $member["timestamp"],
-                            "delete" => "../delete/?id={$data["id"]}&email={$member["email"]}"
-                        ));
-            }
-            $preview->value .= $table->render();
+        $membersLimit = 20;
+        $membersOffset = ($this->input->pageNum - 1) * $membersLimit;
+
+        $retval = $this->mailchimp->_get("lists/{$list_id}/members", array(
+            "offset" => $membersOffset,
+            "count" => 20,
+            "status" => "subscribed",
+            ));
+
+        // print_r($retval);
+
+        $membersTotal = $retval['total_items'];
+
+        $preview->value .= sprintf($this->_("Total member count: %s"), $membersTotal);
+        $preview->value .= " | ";
+        $preview->value .= sprintf($this->_("Viewing: %s"), $membersLimit) . "<br/>";
+        $table = $this->modules->get("MarkupAdminDataTable");
+        $table->setEncodeEntities(false);
+
+        $table->headerRow(array(
+                          "Email",
+                          "Last modified",
+                          "Actions"
+                    ));
+
+        $confirmText = $this->_("Unsubscribe this member?");
+        foreach($retval["members"] as $member){
+            $table->row(array(
+                        $member["email_address"],
+                        $member["last_changed"],
+                        "<a href='../unsubscribe/?id={$list_id}&email={$member["email_address"]}' onclick='return confirm(\"$confirmText\")'>" . $this->_("unsubscribe") . "</a>",
+                    ));
         }
+
+        $this->input->whitelist("id", $list_id);
+        $preview->value .= $table->render();
+        $pagination = new PageArray();
+        $pagination->setTotal($membersTotal);
+        $pagination->setLimit($membersLimit);
+        $pagination->setStart($membersOffset);
+
+        $preview->value .= $pagination->renderPager();
 
 
         $fieldset = $this->modules->get("InputfieldFieldset");
@@ -324,12 +435,46 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         $field = $this->modules->get("InputfieldEmail");
         $field->label = $this->_("E-mail Address");
-        $field->attr("id+name","email");
+        $field->attr("name", "email");
         $fieldset->add($field);
+
+
+        if($data['stats']['merge_field_count']) {
+
+            $mergeFields = $this->mailchimp->_get("lists/{$list_id}/merge-fields");
+
+            // print_r($mergeFields);
+
+            foreach($mergeFields['merge_fields'] as $mergefield){
+                $type = ucfirst($mergefield['type']);
+                if($type == "Radio") $type = "Radios";
+                $field = $this->modules->get("Inputfield{$type}");
+                $field->label = $mergefield['name'];
+                $field->attr("name", "merge_" . $mergefield['tag']);
+                if(isset($mergefield["options"]["choices"])){
+                    foreach($mergefield["options"]["choices"] as $key => $choice){
+                        $field->addOption($choice, $choice); // value is label (mailchimp)
+                    }
+                }
+                $fieldset->add($field);
+            }
+        }
+
+        if(count(wire("languages"))){
+            $field = $this->modules->InputfieldRadios;
+            $field->label = $this->_("Language");
+            $field->attr("name", "language");
+            $field->optionColumns = 4;
+            foreach(wire("languages") as $lang){
+                $name = ($lang->isDefault()) ? "de" : $lang->name;
+                $field->addOption($name, "$lang->title");
+            }
+            $fieldset->add($field);
+        }
 
         $field = $this->modules->get("InputfieldSelect");
         $field->label = $this->_("E-mail Type");
-        $field->attr("id+name","email_type");
+        $field->attr("name", "email_type");
         $field->addOptions(array(
                            'html' => 'HTML',
                            'text' => 'Text'
@@ -337,19 +482,26 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $fieldset->add($field);
 
         $field = $this->modules->get("InputfieldSubmit");
-        $field->attr("id+name","subscribe");
-        $field->attr("value","subscribe");
+        $field->attr("name", "subscribe");
+        $field->attr("value", "subscribe");
         $fieldset->add($field);
+
 
         $wrapper_list->add($fieldset);
         $wrapper_list->add($preview);
 
-
-
-        $form->add($wrapper_list);
         $form->add($wrapper_settings);
+        $form->add($wrapper_list);
         $form->add($wrapper_subscription);
         $form->add($wrapper_beamer);
+
+
+
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->attr("name","submit");
+        $field->attr("value", $this->_("save"));
+
+        $form->add($field);
 
 
         /**
@@ -364,41 +516,6 @@ class MailChimpLists extends Process implements ConfigurableModule {
         return $form;
     }
 
-
-    /**
-     * get MailChimp list
-     * @param  string $cid campaign id
-     * @return mixed false on error, campaign if successful
-     */
-    protected function _getMCList($cid) {
-        $retval = $this->mcapi->lists(array('list_id' => $cid),0,20);
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('Unable to retrieve List!'));
-            return false;
-        } else {
-            return $retval;
-        }
-    }
-
-
-    protected function _getLists(){
-        $retval = $this->mcapi->lists();
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('"Unable to load lists!"'));
-            return false;
-        } else {
-            return $retval['data'];
-        }
-    }
-
-    protected function _checkErrorMC($msg = '') {
-        if($this->mcapi->errorCode) {
-            $this->error(sprintf($this->_("ErrorCode = %s"), $this->mcapi->errorCode));
-            $this->error(sprintf($this->_("ErrorMessage = %s"), $this->mcapi->errorMessage));
-            return false;
-        }
-        return true;
-    }
 
     public function install() {
 

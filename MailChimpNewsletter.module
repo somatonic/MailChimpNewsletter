@@ -14,6 +14,8 @@
 
 
 require_once( dirname(__FILE__) . "/MCAPI.class.php");
+require_once( dirname(__FILE__) . "/MailChimp.php");
+require_once( dirname(__FILE__) . "/MailChimp_v2.0.php");
 
 
 class MailChimpNewsletter extends WireData implements Module, ConfigurableModule {
@@ -28,35 +30,102 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 1,
+            'version' => 2,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
             'singular' => true,
-            'autoload' => false,
+            'autoload' => "template=admin",
             // 'permission' => "mailchimp",
-            'installs' => array('MailChimpCampaigns','MailChimpLists')
+            // 'permissions' => array("mailchimp" => "MailChimp Newsletter"),
+            'installs' => array('MailChimpCampaigns','MailChimpLists'),
         );
     }
 
-    static protected $defaults = array(
-            'apikey' => '',
-            'remoteurl' => ''
-        );
+
+    // $apikey;
+    // public $mailchimp;
+    // public $newsletter_parent_id;
+    // public $mcapi;
+
+    public function __construct(){
+        // $this->apikey = $this->data('apikey');
+        // $this->newsletter_parent_id = $this->get('newsletter_parent_id');
+
+    }
 
     public function init() {
-        //parent::init();
-        $this->apikey = $this->data['apikey'];
-        $this->newsletter_parent_id = $this->data['newsletter_parent_id'];
         $this->mcapi = new MCAPI($this->apikey);
+
+        // $this->apikey = $this->data['apikey'];
+        // $this->newsletter_parent_id = $this->data['newsletter_parent_id'];
+        // $this->mcapi = new MCAPI($this->apikey);
+
+        // MailChimp REST API 3.0
+        $this->mailchimp = new Drewm\MailChimp\MailChimp($this->apikey);
+
+        // MailChimp API 2.0
+        $this->mailchimp2 = new MailChimp($this->apikey);
+
+        $this->addHookAfter("ProcessPageEdit::buildForm", $this, "hookPageEditForm");
+        $this->addHookAfter("ProcessPageEdit::buildFormContent", $this, "hookPageEditFormContent");
+    }
+
+    /**
+     * Call wrapper for API 3.0
+     * @param  [type] $method [description]
+     * @param  [type] $args   [description]
+     * @return [type]         [description]
+     */
+    public function __call($method, $args){
+        $method = str_replace("_", "", $method);
+        if(!method_exists($this->mailchimp, "$method")) throw new WireException("function $method() does not exist");
+        $res = call_user_func_array(array($this->mailchimp, $method), $args);
+
+
+        wire("log")->save("mailchimp", "Action: $method, Args: " . print_r($args, true));
+        wire("log")->save("mailchimp", "Action: $method, Res: " . print_r($res, true));
+
+
+        if($res && isset($res['status']) && ctype_digit($res['status']) && $res['status'] != 200){
+            $this->error($res['status'] . " - " . $res['title'] . " - " . $res['detail']);
+            wire("log")->save("mailchimp", ($res['status'] . " - " . $res['title'] . " - " . $res['detail'] . " - Errors: " . print_r($res['errors'], true)));
+            return false;
+        }
+        return $res;
     }
 
 
+    public function call($method, $args = array()){
+        $res = $this->mailchimp2->call($method, $args);
+        wire("log")->save("mailchimp_v2", "Action: $method, Args: " . print_r($args, true). " | Res: " . print_r($res, true));
+        if($res && isset($res['status']) && $res['status'] == "error"){
+            $this->error($res['status'] . " code: " . $res['code'] . " - " . $res['name'] . " - " . $res['error']);
+            return false;
+        }
+        return $res;
+    }
+
     protected function _getNewsletterPageID($id) {
-        $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$id';";
+        $query = "SELECT * FROM {$this->className()} WHERE campaign_id = '$id';";
         $res = $this->db->query($query);
         $arr = $res->fetch_array();
         return $arr['newsletter_id'];
+    }
+
+    protected function _findCampaignsIDByPageID($id) {
+        $query = "SELECT * FROM MailChimpCampaigns WHERE newsletter_id = '$id';";
+        $res = $this->db->query($query);
+        $arr = array();
+        if($res->num_rows){
+            while($row = $res->fetch_array()) {
+                $arr[] = $row;
+            }
+            // print_r($arr);
+            return $arr;
+        } else {
+            return false;
+        }
     }
 
     /**
@@ -103,28 +172,122 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         return true;
     }
 
-
-
-
     /**
      * MailChimp Helpers
      */
 
-    public function subscribeListEmail($listID, $email){
+    public function subscribeListEmail($listID, $email, $mergevars = NULL){
         $email = $this->sanitizer->email($email);
         if(!$email) throw new WireException("No Email specified");
         if(!$listID) throw new WireException("No ListID specified");
 
-        if($this->mcapi->listSubscribe($listID, $email, '') === true) {
-            $message = "<p class='ui-message'>Um die Anmeldung abzuschließen, klicken Sie bitte auf den Link in der E-Mail, die wir soeben an Sie geschickt haben.</p>";
+        $return = array();
+
+        if($this->mcapi->listSubscribe($listID, $email, $mergevars) === true) {
+            $return["success"] = 1;
+            $return["message"] = "<p class='ui-state-highlight'>" . $this->_("To complete the subscription process, please click the link in the email we just sent you.") ."</p>";
         } else {
             // An error ocurred, return error message
-            $message = "<p class='ui-error'>Error: {$this->mcapi->errorMessage}</p>";
+            $return["success"] = 0;
+            $return["message"] = $this->mcapi->errorMessage;
         }
-        return $message;
+        return $return;
     }
 
+    /**
+     * Hook to add Mailchimp Newsletter tab after "Content" Tab
+     * @param  [type] $event [description]
+     * @return [type]        [description]
+     */
+    public function hookPageEditFormContent($event) {
+        $page = $event->object->getPage();
+        if(!$this->isNewsletterPage($page)) return;
+        $event->object->addTab($this->className(), "Mailchimp Newsletter");
+    }
 
+    public function isNewsletterPage($page){
+        if(!$this->newsletter_template_id) {
+            return false;
+            //throw new WireException("No newsletter template id setting found. Please configure MailChimpNewsletter Module");
+        }
+        $nltpl = wire("templates")->get($this->newsletter_template_id);
+        if(!$nltpl) return false;
+        if(!$page->is("template=$nltpl->name")) return false;
+        return true;
+
+    }
+
+    public function hookPageEditForm($event) {
+
+        $page = $event->object->getPage();
+        if(!$this->isNewsletterPage($page)) return;
+
+        // $campaignFound = $page->id;
+
+        $form = $event->return;
+        $modules = wire("modules");
+        $fs = new InputfieldWrapper();
+        $fs->attr("title", "MailChimp Newsletter");
+        $fs->id = $this->className();
+
+
+        $f = $modules->InputfieldMarkup;
+        $f->label = $this->_("Mailchimp campaign(s) using this page");
+
+        $campaignsFound = $this->_findCampaignsIDByPageID($page->id);
+        if($campaignsFound) {
+            $campaignsEditBaseUrl = wire("config")->urls->admin . "mailchimp-newsletter/mailchimp-campaigns/edit/";
+            foreach($campaignsFound as $camp){
+                $f->value .= "<p><a class='ui-widget ui-button ui-state-default' href='$campaignsEditBaseUrl?id={$camp['campaign_id']}' target='_blank'>" . $this->_("go to MailChimp campaign") . "</a> : URL: " . $camp['newsletter_url'] . "</p>";
+            }
+        } else {
+            $f->value = $this->_("No campaign found for this page. Create one one using the buttons below.");
+        }
+        $fs->add($f);
+
+
+        $f = $modules->InputfieldMarkup;
+        $f->label = $this->_("Create new MailChimp campaign");
+
+        $createUrls = $this->getNewsletterUrlsArray($page);
+        $campaignsCreateBaseUrl = wire("config")->urls->admin . "mailchimp-newsletter/mailchimp-campaigns/add/";
+        $f->description = $this->_("Click on the button to create a new campaign using this page");
+        foreach($createUrls as $key => $url){
+            $lang = wire("languages")->get($url['lang']);
+            $langName = $lang->id ? "($lang->title)" : "";
+            $f->value .= "<p><a class='ui-widget ui-button ui-state-default' href='$campaignsCreateBaseUrl?nlid=$page->id&nllang={$url['lang']}&amp;nlurl={$url['url']}' target='_blank' href=''>" . $this->_("create campaign") . " $langName</a> : URL: {$url['url']}</p>";
+        }
+        // $f->value = implode("|", $createUrls);
+        $fs->add($f);
+
+        // $tabs = $event->object->getTabs();
+
+        $fieldsetContent = $form->find("id^=ProcessPageEdit")->first();
+        $form->add($fs);
+        $form->insertAfter($fs, $fieldsetContent);
+
+    }
+
+    public function getNewsletterUrlsArray($page){
+
+        $urls = array();
+        if(count(wire("languages")) > 1){
+            $langSaved = wire("user")->language;
+            foreach(wire("languages") as $lang){
+                wire("user")->language = $lang;
+                if(wire("modules")->isInstalled("Multisite")){
+                    $urls[] = array("lang" => $lang->id, "url" => wire("modules")->Multisite->getDomainUrl($page));
+                } else {
+                    $urls[] = array("lang" => $lang->id, "url" => $page->httpUrl);
+                }
+            }
+            wire("user")->language = $langSaved;
+        } else {
+            $urls[] = array('lang' => 0, 'url' => $page->httpUrl);
+        }
+
+        return $urls;
+    }
 
     public function install() {
 
@@ -173,7 +336,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     }
 
     static public function getModuleConfigInputfields(array $data) {
-        $data = array_merge(self::$defaults, $data);
+        // $data = array_merge(self::$defaults, $data);
 
         $fields = new InputfieldWrapper();
         $modules = wire("modules");
@@ -181,21 +344,21 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         $field = $modules->get("InputfieldText");
         $field->attr('name', 'apikey');
         $field->attr('size', 40);
-        $field->attr('value', $data['apikey']);
+        $field->attr('value', isset($data['apikey']) ? $data['apikey'] : "");
         $field->label = "MailChimp API Key";
         $fields->append($field);
 
         $field = $modules->get("InputfieldText");
         $field->attr('name', 'newsletter_parent_id');
         $field->attr('size', 10);
-        $field->attr('value', $data['newsletter_parent_id']);
+        $field->attr('value', isset($data['newsletter_parent_id']) ? $data['newsletter_parent_id'] : "");
         $field->label = "Newsletter Parent Page ID";
         $fields->append($field);
 
         $field = $modules->get("InputfieldText");
         $field->attr('name', 'newsletter_template_id');
         $field->attr('size', 10);
-        $field->attr('value', $data['newsletter_template_id']);
+        $field->attr('value', isset($data['newsletter_template_id']) ? $data['newsletter_template_id'] : "");
         $field->label = "Newsletter Template ID you want to be able to select";
         $field->required = 0;
         $fields->append($field);

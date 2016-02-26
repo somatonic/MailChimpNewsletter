@@ -1,26 +1,107 @@
+
+/**
+ * Mailchimp Campaigns JS
+ */
+
+var MailchimpCampaigns = {
+
+    spinner: null,
+
+    init: function(){
+        this.spinner = $("<li class='title' id='ProcessListerSpinner'><i class='fa fa-lg fa-spin fa-spinner'></i></li>");
+        $("#breadcrumbs ul.nav").append(this.spinner);
+        this.initListSelect();
+        this.initFolderSelect();
+        this.bindNewsletterPreview();
+        this.bindSelectNewsletterPage();
+        this.spinner.fadeOut();
+    },
+
+    bindSelectNewsletterPage: function(){
+        var that = this;
+        if($("#Inputfield_newsletter_id").length){
+            $("#Inputfield_newsletter_id").on("change", function(){
+                console.log($(this).val());
+                $.ajax({
+                    url: config.MailChimp.urls.MailChimpCampaigns,
+                    type: "post",
+                    data: {
+                        "getnlurl": 1,
+                        "pid": $(this).val()
+                    },
+                    dataType: "json",
+                    success: function(data){
+                        console.log(data);
+                        $('#Inputfield_newsletter_url').prev("p").html(data.body);
+                        $('#Inputfield_newsletter_url').val(data.urls[0]['url']);
+                    }
+                });
+
+            });
+        }
+
+    },
+
+    initFolderSelect: function(){
+        var that = this;
+        if($("select[name='folder_id']").length){
+            $("select[name='folder_id']").on("change", function(){
+                that.spinner.fadeIn("fast");
+                document.location.href = './?folder_id=' + $(this).val();
+            });
+        }
+    },
+
+    initListSelect: function(){
+
+        // on change of list select, populate list defaults to fields
+        if($("select[name='list_id']").length){
+            $("select[name='list_id']").on("change", function(){
+                console.log($(this).val());
+                var $sel = $(this).find(":selected");
+                console.log($sel.data("from_name"));
+                var fromName = $sel.data("from_name");
+                var fromEmail = $sel.data("reply_to");
+                var emailSubject = $sel.data("subject_line");
+
+                $('input[name="subject_line"]').val(emailSubject);
+                $('input[name="reply_to"]').val(fromEmail);
+                $('input[name="from_name"]').val(fromName);
+
+            });
+        }
+
+    },
+
+    bindNewsletterPreview: function(){
+
+        $('#MC_NewsletterPreview a button').bind('mousedown',function(e){
+            e.stopPropagation();
+            e.preventDefault();
+            $(this).parent().addClass("iframe");
+            var h = $(window).height()-65;
+            var w = $(window).width() > 1150 ? 1150 : $(window).width()-100;
+            $(this).parent().fancybox({
+                hideOnContentClick: false,
+                centerOnScroll: false,
+                frameWidth: w,
+                frameHeight: h
+            }).trigger('click');
+            return false;
+         });
+        $('#MC_NewsletterPreview a').click(function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        });
+
+    }
+
+};
+
 $(document).ready(function(){
 
-
-
-    $('#MC_NewsletterPreview a button').bind('mousedown',function(e){
-        e.stopPropagation();
-        e.preventDefault();
-        $(this).parent().addClass("iframe");
-        var h = $(window).height()-65;
-        var w = $(window).width() > 1150 ? 1150 : $(window).width()-100;
-        $(this).parent().fancybox({
-            hideOnContentClick: false,
-            centerOnScroll: false,
-            frameWidth: w,
-            frameHeight: h
-        }).trigger('click');
-        return false;
-     });
-    $('#MC_NewsletterPreview a').click(function(e){
-        e.preventDefault();
-        e.stopPropagation();
-        return false;
-    });
+    MailchimpCampaigns.init();
 
     // remove scripts, because they've already been executed since we are manipulating the DOM below (WireTabs)
     // which would cause any scripts to get executed twice
@@ -34,3 +115,4 @@ $(document).ready(function(){
     });
 
 });
+
