@@ -30,7 +30,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 2,
+            'version' => 3,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -206,13 +206,17 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     }
 
     public function isNewsletterPage($page){
-        if(!$this->newsletter_template_id) {
+        // if(!$this->newsletter_template_id) {
+        //     return false;
+        // }
+        if(!count($this->newsletter_templates)) {
             return false;
-            //throw new WireException("No newsletter template id setting found. Please configure MailChimpNewsletter Module");
         }
-        $nltpl = wire("templates")->get($this->newsletter_template_id);
-        if(!$nltpl) return false;
-        if(!$page->is("template=$nltpl->name")) return false;
+        // $nltpl = wire("templates")->get($this->newsletter_template_id);
+        // print_r($this->newsletter_templates);
+        $nltpl = wire("templates")->find("id=" . implode("|", $this->newsletter_templates));
+        if(!$nltpl->count) return false;
+        if(!$page->is("template=$nltpl")) return false;
         return true;
 
     }
@@ -355,11 +359,21 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         $field->label = "Newsletter Parent Page ID";
         $fields->append($field);
 
-        $field = $modules->get("InputfieldText");
-        $field->attr('name', 'newsletter_template_id');
+        // $field = $modules->get("InputfieldText");
+        // $field->attr('name', 'newsletter_template_id');
+        // $field->attr('size', 10);
+        // $field->attr('value', isset($data['newsletter_template_id']) ? $data['newsletter_template_id'] : "");
+        // $field->label = "Newsletter Template ID you want to be able to select";
+        // $field->required = 0;
+        // $fields->append($field);
+
+        $field = $modules->get("InputfieldAsmSelect");
+        $field->attr('name', 'newsletter_templates');
         $field->attr('size', 10);
-        $field->attr('value', isset($data['newsletter_template_id']) ? $data['newsletter_template_id'] : "");
-        $field->label = "Newsletter Template ID you want to be able to select";
+        $field->attr('value', isset($data['newsletter_templates']) ? $data['newsletter_templates'] : "");
+        $tpls = wire("templates");
+        foreach($tpls as $tpl) $field->addOption($tpl->id, $tpl->label ? $tpl->label : $tpl->name);
+        $field->label = "Newsletter Templates you want to be able to select";
         $field->required = 0;
         $fields->append($field);
 
