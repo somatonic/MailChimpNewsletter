@@ -86,11 +86,13 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         wire("log")->save("mailchimp", "Action: $method, Args: " . print_r($args, true));
         wire("log")->save("mailchimp", "Action: $method, Res: " . print_r($res, true));
 
-
         if($res && isset($res['status']) && ctype_digit($res['status']) && $res['status'] != 200){
             $this->error($res['status'] . " - " . $res['title'] . " - " . $res['detail']);
             wire("log")->save("mailchimp", ($res['status'] . " - " . $res['title'] . " - " . $res['detail'] . " - Errors: " . print_r($res['errors'], true)));
-            return false;
+            $res['success'] = false;
+        } else {
+            wire("log")->save("mailchimp", ($res['status'] . " - " . $res['title'] . " - " . $res['detail'] . " - Errors: " . print_r($res['errors'], true)));
+            $res['success'] = true;
         }
         return $res;
     }
@@ -101,7 +103,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         wire("log")->save("mailchimp_v2", "Action: $method, Args: " . print_r($args, true). " | Res: " . print_r($res, true));
         if($res && isset($res['status']) && $res['status'] == "error"){
             $this->error($res['status'] . " code: " . $res['code'] . " - " . $res['name'] . " - " . $res['error']);
-            return false;
+            // return false;
         }
         return $res;
     }
@@ -202,6 +204,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     public function hookPageEditFormContent($event) {
         $page = $event->object->getPage();
         if(!$this->isNewsletterPage($page)) return;
+        if(!$this->wire("user")->hasPermission("mailchimp")) return;
         $event->object->addTab($this->className(), "Mailchimp Newsletter");
     }
 
@@ -226,6 +229,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         $page = $event->object->getPage();
         if(!$this->isNewsletterPage($page)) return;
 
+        if(!$this->wire("user")->hasPermission("mailchimp")) return;
         // $campaignFound = $page->id;
 
         $form = $event->return;

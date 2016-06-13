@@ -252,7 +252,7 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         $list_id = $data['id'];
 
-        print_r($data);
+        // print_r($data);
 
         $form = $this->modules->get("InputfieldForm");
         $form->action = "../edit/?id=$list_id";
