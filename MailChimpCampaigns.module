@@ -13,7 +13,12 @@
  * http://www.ryancramer.com
  *
  *
- * @todo Make it possible to use schedule send function for campaigns
+ * Changelog:
+ *
+ *  v 0.0.4 - 17.06.2016 Philipp Urlich
+ *  - Added schedule send function for campaigns
+ *  - Refactoring, removed old code
+ *  - Fix minor issues with saving segment id in DB
  *
  */
 
@@ -33,7 +38,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Campaigns',
-            'version' => 2,
+            'version' => 3,
             'summary' => 'Manage MailChimp Campaigns',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -49,7 +54,9 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         );
 
     public function init() {
+
         parent::init();
+
         $this->modules->get("JqueryWireTabs");
         $this->mailchimp = $this->modules->get("MailChimpNewsletter");
         $this->apikey = $this->mailchimp->apikey;
@@ -82,6 +89,9 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         }
         // API v2.0
         // use $this->mailchimp->call(method, args);
+
+        $this->modulePage = $this->pages->get("template=admin, process={$this->modules->getModuleID($this->className())}, include=hidden");
+        $this->moduleUrl = $this->modulePage->id ? $this->modulePage->url : "";
     }
 
     public function ready(){
@@ -90,18 +100,17 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
     }
 
+    /**
+     * List campaign from mailchimp
+     */
     public function execute(){
 
         $out = "";
 
         $this->fuel->set('processHeadline', 'Campaigns');
-
         $out .= "<h2>" . $this->_("Campaigns") . "</h2>";
 
-
         $folders_list = '';
-        // $folders = $this->mailchimp->_get("campaign-folders");
-
         $folders = $this->mailchimp->call("folders/list", array("type" => "campaign"));
 
         $form = wire("modules")->InputfieldForm;
@@ -127,27 +136,22 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $add->attr('class', $add->class . ' head_button_clone');
         $add->attr('href', "./add/");
 
-
-
         $options = array();
 
         if(wire("input")->get->folder_id){
             $options["filters"]["folder_id"] = (int) wire("input")->get->folder_id;
+            $this->input->whitelist("folder_id", wire("input")->get->folder_id);
         }
 
         // $options["since_create_time"] = date("c", strtotime("-1year"));
-        // $options["count"] = 2;
-        // $options["offset"] = ($this->input->pageNum - 1) * $options["count"];
-
-        // $retval = $this->mailchimp->_get("campaigns", $options);
+        $options["limit"] = 10;
+        $options["start"] = ($this->input->pageNum - 1);// * $options["count"];
 
         $options['sort_field'] = "create_time";
         $options['sort_dir'] = "DESC";
         $retval = $this->mailchimp->call("campaigns/list", $options);
+        // $retval = $this->mailchimp->_get("campaigns", $options); // v3
 
-
-
-        $this->input->whitelist("folder_id", wire("input")->get->folder_id);
 
         if(count($retval['data'])){
             $campaignTable = $this->_campaignsTable($retval['data'])->render();
@@ -155,21 +159,31 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             $campaignTable = $this->_("No campaigns");
         }
 
-        // $pagination = new PageArray();
-        // $pagination->setTotal($retval["total_items"]);
-        // $pagination->setLimit($options["count"]);
-        // $pagination->setStart($options["offset"]);
+        $pagination = new PageArray();
+        $pagination->setTotal($retval["total"]);
+        $pagination->setLimit($options["limit"]);
+        $pagination->setStart($options["start"] * $options["limit"]);
 
-        // $total = "<p>Total: " . $retval['total_items'] . "</p>";
+
+        $total = "<p>Total: " . $retval['total'] . "</p>";
 
         $content = "<div class='campaigns-result'>$campaignTable</div>";
-
+        $content .= $pagination->renderPager();
+        $content .= $total;
         $out .= $folders_list . $content . $add->render();
 
         return $out;
 
     }
 
+    /**
+     * edit the campaign
+     * preview campaign
+     * send tests
+     * send campaign
+     * schedule campaign
+     * delete campaign
+     */
     public function executeEdit() {
 
         $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Campaigns'));
@@ -180,20 +194,18 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             return "<p>" . $this->_("No campaign ID specified") . "</p>";
         }
 
-        // $retval = $this->_getMCCampaign($campaign_id);
-        // $retval = $this->mailchimp->_get("campaigns/$campaign_id");
         $retval = $this->mailchimp->call("campaigns/list", array(
                 "filters" => array("campaign_id" => $campaign_id),
             ));
-
 
         if(!$retval){
             return "<p>" . $this->_("No campaign found") . "</p>";
         }
 
+        // build the edit form with multiple tabs
         $form = $this->_buildEditForm($retval['data'][0]);
 
-        // save submited form
+        // update campaign when submited
         if($this->input->post->submit) {
 
             $form->email_test->required = 0;
@@ -205,7 +217,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             }
 
             if(!$form->getErrors()) {
-                // update campaign
 
                 $opts['options']['title'] = $form->get("title")->value;
                 $opts['options']['list_id'] = $form->get("list_id")->value;
@@ -224,42 +235,34 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $newsletterPageID = (int) $form->get("newsletter_id")->value;
                 $newsletterPageUrl = $form->get("newsletter_url")->value;
 
-                // if($newsletterPageID && !$newsletterPageUrl) {
-                //     $newsletterpage = $this->pages->get($newsletterPageID);
-                //     if(!$newsletterpage->id){
-                //         $this->error($this->_("Unable to get newsletter page, make sure it is published and available via its public URL!"));
-                //         $this->session->redirect("../");
-                //     } else {
-                //         $newsletter_url = $newsletterpage->httpUrl;
-                //     }
-                // } else if($newsletterPageUrl){
-                //     $newsletter_url = $newsletterPageUrl;
-                // }
-
                 $opts['content']['url'] = $newsletterPageUrl;
                 $opts['options']['generate_text'] = true;
 
                 // generate text version
                 // workaround for text version to update correctly, we make a second update on content
-                $textVersion = $this->mailchimp->call("helper/generate-text", array("type" => "url", "content" => array("cid" => $campaign_id, "url" => $newsletterPageUrl)));
+                $textVersion = $this->mailchimp->call("helper/generate-text", array(
+                        "type" => "url",
+                        "content" => array(
+                                "cid" => $campaign_id,
+                                "url" => $newsletterPageUrl
+                            )
+                        ));
+
                 if($textVersion && $textVersion['text']){
                     $opts['content']['text'] = $textVersion['text'];
                 }
 
                 // update campaign on MailChimp
                 foreach($opts as $key => $v){
-                    $this->mailchimp->call("campaigns/update", array("cid" => $campaign_id, "name" => $key, "value" => $v));
-                    // $this->_updateMCCampaign($campaign_id, $key, $v);
+                    $this->mailchimp->call("campaigns/update", array(
+                            "cid" => $campaign_id,
+                            "name" => $key,
+                            "value" => $v
+                        ));
                 }
 
-                // $this->mailchimp->_patch("campaigns/$campaign_id", array("content" => array("url" => $newsletter_url)));
-
-                // $this->mailchimp->_put("campaigns/$campaign_id/content", array(
-                //     "url" => $newsletter_url,
-                //     ));
-
-                // update campaign in DB for newsletter page id
-                $this->_update($newsletterPageID, $newsletterPageUrl, $campaign_id, $form->list_id->value);
+                // update campaign in DB table with newsletter page id
+                $this->_update($newsletterPageID, $newsletterPageUrl, $campaign_id, $form->list_id->value, $listSegment->value);
 
                 $this->message($this->_('Campaign updated'));
                 $this->session->redirect("../edit/?id=$campaign_id");
@@ -294,8 +297,10 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
         // send campaign email
         if($this->input->post->sendcampaign){
+
             $form->email_test->required = 0;
             $form->processInput($this->input->post);
+
             if(!$form->getErrors()){
                 $emails = array($this->input->post->email_test);
                 $retval = $this->mcapi->campaignSendNow($campaign_id);
@@ -315,7 +320,48 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             }
         }
 
-        // delete campaign email
+        // schedule campaign
+        if($this->input->post->schedulecampaign){
+
+            $form->email_test->required = 0;
+            $form->schedule_date->attr("value", $this->input->post->schedule_date);
+            $form->schedule_hour->attr("value", $this->input->post->schedule_hour);
+            $form->schedule_min->attr("value", $this->input->post->schedule_min);
+
+            $scheduleDate = $this->input->post->schedule_date;
+            if(!$scheduleDate) {
+                $form->schedule_date->error("No Schedule 'Date' specified!");
+            }
+
+            $scheduleHour = $this->input->post->schedule_hour;
+            if(!$scheduleHour) {
+                $form->schedule_hour->error("No Schedule 'Hour' specified!");
+            }
+
+            $scheduleMin = $this->input->post->schedule_min;
+            if(!$scheduleMin) {
+                $form->schedule_min->error("No Schedule 'Minutes' specified!");
+            }
+
+            if($scheduleDate && $scheduleHour && $scheduleMin) {
+                // $this->mailchimp->_post("/campaigns/{$campaign_id}/actions/unschedule");
+
+                $utcDate = gmdate("c", strtotime("$scheduleDate $scheduleHour:$scheduleMin"));
+                $this->mailchimp->_post("/campaigns/{$campaign_id}/actions/schedule",array(
+                    "schedule_time" => $utcDate,
+                    ));
+                $this->message(sprintf($this->_('Campaign scheduled to send at: %s'), $utcDate));
+                $this->session->redirect("../edit/?id=$campaign_id");
+            }
+        }
+
+        if($this->input->post->unschedulecampaign){
+            $this->mailchimp->_post("/campaigns/{$campaign_id}/actions/unschedule");
+            $this->message($this->_('Campaign unscheduled'));
+            $this->session->redirect("../edit/?id=$campaign_id");
+        }
+
+        // delete campaign
         if($this->input->post->deletecampaign){
             $this->mcapi->campaignDelete($campaign_id);
             if(!$this->_checkErrorMC()){
@@ -332,6 +378,9 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         return $form->render();
     }
 
+    /**
+     * Create or add a new campaign to mailchimp
+     */
     public function executeAdd() {
 
         $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Campaigns'));
@@ -361,7 +410,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $opts['type'] = "regular";
                 $opts['authenticate'] = true;
 
-                // TODO: V3.0
+                // @TODO: V3.0
                 // $opts['settings']['title'] = $form->get("title")->value;
                 // $opts['settings']['subject_line'] = $form->get("subject_line")->value;
                 // $opts['settings']['from_name'] = $form->get("from_name")->value;
@@ -381,7 +430,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
                 $opts['options']['title'] = $form->get("title")->value;
                 $opts['options']['list_id'] = $form->get("list_id")->value;
-                // $opts['options']['tracking'] = array('opens' => true, 'html_clicks' => true, 'text_clicks' => false);
 
                 if($form->get("list_id")->value) {
                     $listSegmentName = "segment_" . $form->get("list_id")->value;
@@ -400,24 +448,9 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $opts['options']['tracking']['html_clicks'] = true;
                 $opts['options']['tracking']['text_clicks'] = false;
 
-                // if($newsletterPageID) {
-                //     $newsletterpage = $this->pages->get($newsletterPageID);
-                //     if(!$newsletterpage->id){
-                //         $this->error($this->_("Unable to get newsletter page, make sure it is published and available via public URL!"));
-                //         $this->session->redirect("../");
-                //     } else {
-                //         $newsletter_url = $newsletterpage->httpUrl;
-                //     }
-                // }
-
-                // if($newsletterPageUrl) {
-                //     $newsletter_url = $newsletterPageUrl;
-                // }
-
-
                 $opts['content']['url'] = $newsletterPageUrl;
 
-                // TODO: v3.0
+                // @TODO: v3.0
                 // $res = $this->mailchimp->_post("campaigns", $opts);
 
                 // if($res && isset($res['id'])){
@@ -426,20 +459,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 //     $this->message(sprintf($this->_("New campaign '%s' created on MailChimp"), $opts['settings']['title']));
                 //     $this->session->redirect("../edit/?id={$res['id']}");
                 // }
-
-
-                // Mailchimp 1.3
-
-                // $campaign_id = $this->mcapi->campaignCreate($type, $opts, $content);
-                // if(!$this->_checkErrorMC()){
-                //     $this->error($this->_("Unable to create campaign on MailChimp!"));
-                //     $this->session->redirect("../");
-                // } else {
-
-                //     $this->message(sprintf($this->_("New campaign '%s' created on MailChimp"),$this->input->post->title));
-                //     $this->session->redirect("../edit/?id=$campaign_id");
-                // }
-
 
                 // Mailchimp 2.0
                 $campaign = $this->mailchimp->call("campaigns/create", $opts);
@@ -457,24 +476,21 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         return $form->render();
     }
 
+
+    /**
+     * Show stats for the sent campaign
+     */
     public function executeStats(){
 
         $this->fuel->breadcrumbs->add(new Breadcrumb('../', 'Campaigns'));
 
         $campaign_id = $this->input->get('id');
-        // $data = $this->_getMCCampaign($campaign_id);
         $data = $this->mailchimp->call("campaigns/list", array("filters" => array("campaign_id" => $campaign_id)));
 
         $title = sprintf($this->_('Campaign Stats: %s'),$data['data'][0]['title']);
         $this->fuel->set('processHeadline', $title);
 
-
-        /**
-         * Tab Reports
-         */
-
         $retval = $this->mcapi->campaignStats($campaign_id);
-
 
         if(!$this->_checkErrorMC()){
             $this->error($this->_("Could not retrieve Campaign Stats!"));
@@ -493,7 +509,8 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->value .= "<p class='MC_stat'><span>{$retval['emails_sent']}</span>Emails sent</p>";
         $field->value .= "<p class='MC_stat'><span>{$retval['opens']}</span>Opens</p>";
         $field->value .= "<p class='MC_stat'><span>{$retval['unique_opens']}</span>Unique opens</p>";
-        $field->value .= "<p class='MC_stat'><span class='date'>" . date("d-m-Y H:i:s", strtotime($retval['last_open'])) . "</span>Last opened<br/></p>";
+        $lastOpenDate = $retval['last_open'] ? $this->dateGmtToLocal($retval['last_open']) : "N/A";
+        $field->value .= "<p class='MC_stat'><span class='date'>" . $lastOpenDate . "</span>Last opened<br/></p>";
 
         $geoStats = $this->mailchimp->call("reports/geo-opens", array("cid" => $campaign_id));
         $table = wire("modules")->MarkupAdminDataTable;
@@ -510,7 +527,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->value .= "</div>";
         $wrapper->add($field);
         $form->add($wrapper);
-
 
 
         $wrapper = new InputfieldWrapper();
@@ -579,8 +595,8 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $table->row(array("<b>Title</b>", $data['data'][0]['title']));
         $table->row(array("<b>Edited by</b>", $data['data'][0]['content_edited_by']));
         $table->row(array("<b>Type</b>", $data['data'][0]['type']));
-        $table->row(array("<b>Created</b>", $data['data'][0]['create_time']));
-        $table->row(array("<b>Send Time</b>", $data['data'][0]['send_time']));
+        $table->row(array("<b>Created</b>", $this->dateGmtToLocal($data['data'][0]['create_time'])));
+        $table->row(array("<b>Send Time</b>", $this->dateGmtToLocal($data['data'][0]['send_time'])));
         $table->row(array("<b>Status</b>", $data['data'][0]['status']));
         $table->row(array("<b>From name</b>", $data['data'][0]['from_name']));
         $table->row(array("<b>From email</b>", $data['data'][0]['from_email']));
@@ -598,10 +614,12 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $wrapper->add($field);
         $form->add($wrapper);
 
-
         return $form->render();
     }
 
+    /**
+     * Preview Email Newsletter
+     */
     public function executeCampaigncontent(){
         $id = $this->input->get('id');
         $html = $this->input->get('html');
@@ -620,7 +638,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
      * get all campaigns
      * @return MarkupAdminDataTable table of campaigns
      */
-    private function _campaignsTable(Array $campaigns){
+    public function _campaignsTable(Array $campaigns){
 
         // print_r($campaigns);
 
@@ -659,13 +677,13 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
             if($ca['status'] == 'sent') {
                 $action_name = $this->_("stats");
-                $action = "stats/?id=" . $ca['id'];
+                $action = $this->moduleUrl . "stats/?id=" . $ca['id'];
             } else if($ca['status'] == 'sending'){
                 $action_name = $this->_("sending...");
                 $action = null;
             } else {
                 $action_name = $this->_("edit");
-                $action = "edit/?id=".$ca['id'];
+                $action = $this->moduleUrl . "edit/?id=" . $ca['id'];
             }
 
 
@@ -693,7 +711,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 }
             }
 
-
             $title = $ca['title'];
             if(!$title) $title = $this->_("No name defined");
             $table->row(array(
@@ -702,8 +719,8 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $segment_name,
                 $ca['status'],
                 $ca['type'],
-                date("Y.m.d H:i", strtotime($ca['create_time'])),
-                $sendtime = $ca['send_time'] ? date("Y.m.d H:i", strtotime($ca['send_time'])) : " - ",
+                $created = $ca['create_time'] ? $this->dateGmtToLocal($ca['create_time']) : "-",
+                $sendtime = $ca['send_time'] ? $this->dateGmtToLocal($ca['send_time']) : "-",
                 $ca['emails_sent'],
                 $ca['id'],
                 $folder_name,
@@ -714,49 +731,12 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         return $table;
     }
 
-    protected function _insert($newsletter_id, $newsletter_url, $campaign_id, $list_id, $segment_id) {
-        $newsletter_url = $this->sanitizer->url($newsletter_url);
-        if($newsletter_id == 0) $newsletter_id = "NULL";
-        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, newsletter_url, list_id, segment_id, created)
-                VALUES ('$campaign_id',$newsletter_id,'$newsletter_url','$list_id', '$segment_id', now())";
-        $result = $this->db->query($query);
-        $this->message($this->_("New Campaign inserted/updated"));
-        return @mysqli_insert_id($this->db);
-    }
-
-    protected function _update($newsletter_id, $newsletter_url, $campaign_id, $list_id, $segment_id) {
-        $newsletter_url = $this->sanitizer->url($newsletter_url);
-        if($newsletter_id == 0) $newsletter_id = "NULL";
-        $values = "newsletter_id=" . $newsletter_id . ",";
-        $values .= "newsletter_url='" . $newsletter_url . "',";
-        $values .= "list_id='" . $list_id . "',";
-        $values .= "segment_id='" . $segment_id . "'";
-        $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
-        $result = $this->db->query($query);
-        $this->message($this->_("Campaign updated"));
-        return $result;
-    }
-
-    protected function _delete($campaign_id) {
-        $query = "DELETE FROM {$this->className} WHERE campaign_id='$campaign_id'";
-        $result = $this->db->query($query);
-        $this->message($this->_("Campaign deleted from DB"));
-        return $result;
-    }
-
-    protected function _exists($campaign_id) {
-        $query = "SELECT * FROM {$this->className()} WHERE campaign_id='$campaign_id'";
-        $result = $this->db->query($query);
-        if($result->num_rows == 1) return true;
-        return false;
-    }
-
-
     protected function _buildEditForm($data = array()) {
 
         $this->modules->get('JqueryFancybox');
 
         $campaign_id = $data['id'];
+        $is_scheduled = $data['status'] == "schedule";
 
         // print_r($data);
         // check if newsletter exists in PW DB, if not we insert it
@@ -765,14 +745,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             $this->_insert(NULL, NULL, $campaign_id, $data["list_id"], $data['saved_segment']['id']);
         }
 
-        $newsletter_title = "";
-        $newsletter_id = $this->_getNewsletterPageID($campaign_id);
-        $newsletterPage = $this->pages->get((int) $newsletter_id);
-        if($newsletterPage->id){
-            $newsletter_title = $newsletterPage->title;
-        }
-
-        $newsletter_url = $this->_getNewsletterURL($campaign_id);
 
         $form = $this->modules->get("InputfieldForm");
         $form->action = "../edit/?id=$campaign_id";
@@ -784,10 +756,62 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->attr('value', $campaign_id);
         $form->append($field);
 
+        // build tabs
+        $wrapper_settings   = $this->_buildSettingsTab($data);
+        $wrapper_content    = $this->_buildContentTab($data);
+        $wrapper_test       = $this->_buildSendTestTab($data);
+        $wrapper_send       = $this->_buildSendTab($data);
+        $wrapper_schedule   = $this->_buildScheduleTab($data);
+        $wrapper_delete     = $this->_buildDeleteTab($data);
+
+        $form->add($wrapper_settings);
+        $form->add($wrapper_content);
+
+        if($data['status'] != 'sent' && $data['status'] != 'sending') {
+            $form->add($wrapper_test);
+            $form->add($wrapper_schedule);
+            $form->add($wrapper_send);
+            $form->add($wrapper_delete);
+
+        } else if($data['status'] == 'sent'){
+            /**
+             * Tab Reports
+             */
+            $retval = $this->mcapi->campaignStats($campaign_id);
+            if(!$this->_checkErrorMC()){
+                $this->error($this->_("Could not retrieve Campaign Stats!"));
+            }
+            $wrapper_stats = new InputfieldWrapper();
+            $wrapper_stats->attr("id", $this->className() . $this->_("CampaignStats"));
+            $wrapper_stats->attr("title", $this->_("Campaign Stats"));
+
+            $fieldset = $this->modules->get("InputfieldFieldset");
+            $fieldset->label = $this->_("Campaign Stats");
+
+            $field = $this->modules->get("InputfieldMarkup");
+            $field->value = print_r($retval);
+
+            $fieldset->append($field);
+            $wrapper_stats->add($fieldset);
+            $form->add($wrapper_stats);
+        }
 
         /**
-         * Tab Settings
+         * update button
          */
+        $save = $this->modules->get("InputfieldSubmit");
+        $save->value = $this->_("Update Campaign");
+        $save->attr("id+name", "submit");
+        $save->attr("class", $save->class . " head_button_clone");
+
+        $form->add($save);
+
+        return $form;
+    }
+
+
+    protected function _buildSettingsTab($data){
+
         $wrapper_settings = new InputfieldWrapper();
         $wrapper_settings->attr("id", $this->className() . "Settings");
         $wrapper_settings->attr("title", $this->_("Settings"));
@@ -860,7 +884,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         }
 
 
-
         $field = $this->modules->get("InputfieldText");
         $field->attr('name',"subject_line");
         $field->label = $this->_("'subject line'");
@@ -900,15 +923,25 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->attr('value', $data['to_name']);
         $wrapper_settings->add($field);
 
+        return $wrapper_settings;
+    }
 
-        /**
-         * Tab Content
-         */
 
-        $wrapper_content = new InputfieldWrapper();
-        $wrapper_content->attr("id", $this->className() . "EmailContent");
-        $wrapper_content->attr("title", $this->_("Email Content"));
+    protected function _buildContentTab($data){
 
+        $campaign_id = $data['id'];
+        $newsletter_url = $this->_getNewsletterURL($campaign_id);
+
+        $newsletter_title = "";
+        $newsletter_id = $this->_getNewsletterPageID($campaign_id);
+        $newsletterPage = $this->pages->get((int) $newsletter_id);
+        if($newsletterPage->id){
+            $newsletter_title = $newsletterPage->title;
+        }
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . "EmailContent");
+        $wrapper->attr("title", $this->_("Email Content"));
 
         // newletter page
         $field = $this->modules->get("InputfieldPageListSelect");
@@ -924,12 +957,11 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         // make the field required only if newsletter_url is not entered
         if(!$this->mailchimp->newsletter_parent_id){
             $this->message($this->_("Newsletter Parent Page ID not specified in MailChimpNewsletter module settings. You still can alternatively enter a URL below."));
-            //$page_required = 0;
         }
-        // if($newsletter_url || $this->input->post->newsletter_url) $page_required = 0; // off because if required we can't deselect it
+
         $field->required = $page_required;
         $field->attr('value', $newsletter_id);
-        $wrapper_content->add($field);
+        $wrapper->add($field);
 
         // newsletter url
         $field = $this->modules->get("InputfieldURL");
@@ -945,16 +977,10 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $field->description .= "<br>" . $url['url'];
             }
         }
-        // make the field dependent on the page list select
-        // if(!$this->mailchimp->newsletter_parent_id) $url_required = 1;
-        // if(!$this->input->post->newsletter_id) {
-        //     if($this->input->post->newsletter_url) $url_required = 1;
-        // }
+
         $field->required = $url_required;
         $field->attr('value', $newsletter_url);
-        $wrapper_content->add($field);
-
-
+        $wrapper->add($field);
 
         $url = $this->pages->get("name=mailchimp-campaigns")->url;
 
@@ -975,15 +1001,17 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $button->attr('href',"{$url}campaigncontent/?id=$campaign_id&amp;html=0&iframe&modal=1");
         $preview->value .= $button->render();
 
-        $wrapper_content->add($preview);
+        $wrapper->add($preview);
+
+        return $wrapper;
+    }
 
 
-        /**
-         * Tab Send Test
-         */
-        $wrapper_test = new InputfieldWrapper();
-        $wrapper_test->attr("id", $this->className() . "SendTest");
-        $wrapper_test->attr("title", $this->_("Send Test"));
+    protected function _buildSendTestTab($data){
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . "SendTest");
+        $wrapper->attr("title", $this->_("Send Test"));
 
         $fieldset = $this->modules->get("InputfieldFieldset");
         $fieldset->label = $this->_("Send Test Email");
@@ -1001,15 +1029,17 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->attr("id+name", "sendtest");
 
         $fieldset->append($field);
-        $wrapper_test->add($fieldset);
+        $wrapper->add($fieldset);
+
+        return $wrapper;
+    }
 
 
-        /**
-         * Tab Send
-         */
-        $wrapper_send = new InputfieldWrapper();
-        $wrapper_send->attr("id", $this->className() . "SendCampaign");
-        $wrapper_send->attr("title", $this->_("Send Campaign"));
+    protected function _buildSendTab($data){
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . "SendCampaign");
+        $wrapper->attr("title", $this->_("Send Campaign"));
 
         $fieldset = $this->modules->get("InputfieldFieldset");
         $fieldset->label = $this->_("Send Campaign");
@@ -1019,16 +1049,85 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->attr("id+name", "sendcampaign");
 
         $fieldset->append($field);
-        $wrapper_send->add($fieldset);
+        $wrapper->add($fieldset);
+
+        return $wrapper;
+
+    }
+
+    protected function _buildScheduleTab($data){
+
+        $is_scheduled = $data['status'] == "schedule";
+        if($is_scheduled) {
+            $scheduleDateLocal = $this->dateGmtToLocal($data['send_time']);
+            $scheduleDate = date("Y-m-d", strtotime($scheduleDateLocal));
+            $scheduleHour = date("H", strtotime($scheduleDateLocal));
+            $scheduleMin = date("i", strtotime($scheduleDateLocal));
+            $scheduleDateStr = $scheduleDate . " " . $scheduleHour . ":" . $scheduleMin;
+        }
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . "ScheduleCampaign");
+        $wrapper->attr("title", $this->_("Schedule Campaign"));
+
+        $fieldset = $this->modules->get("InputfieldFieldset");
+        $fieldset->label = $this->_("Schedule Campaign");
+
+        $field = $this->modules->get("InputfieldMarkup");
+        $field->label = __("Schedule Date");
+        $field->attr("name", "schedule_datestr");
+        $field->attr("value", $is_scheduled ? $scheduleDateStr : __("No schedule set"));
+        $fieldset->append($field);
+
+        $field = $this->modules->get("InputfieldDatetime");
+        $field->label = __("Schedule Date");
+        $field->attr("name", "schedule_date");
+        $field->attr("value", $scheduleDate);
+        $field->datepicker = InputfieldDatetime::datepickerClick;
+        $field->columnWidth = 33;
+        $fieldset->append($field);
+
+        $field = $this->modules->get("InputfieldSelect");
+        $prepend = array('00','01','02','03','04','05','06','07','08','09');
+        $rangeHours = array_merge($prepend, range(10,23));
+        foreach($rangeHours as $hour) $field->addOption($hour);
+        $field->label = __("Schedule Hour");
+        $field->attr("name", "schedule_hour");
+        $field->attr("value", $scheduleHour);
+        $field->columnWidth = 33;
+        $fieldset->append($field);
+
+        $field = $this->modules->get("InputfieldSelect");
+        $rangeMin = array('00','15','30','45');
+        foreach($rangeMin as $min) $field->addOption($min);
+        $field->label = __("Schedule Min");
+        $field->attr("name", "schedule_min");
+        $field->attr("value", $scheduleMin);
+        $field->columnWidth = 33;
+        $fieldset->append($field);
 
 
-        /**
-         * Tab Delete Campaign
-         */
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->value = $this->_("Save Schedule");
+        $field->attr("id+name", "schedulecampaign");
+        $fieldset->append($field);
 
-        $wrapper_delete = new InputfieldWrapper();
-        $wrapper_delete->attr("id", $this->className() . "DeleteCampaign");
-        $wrapper_delete->attr("title", $this->_("Delete Campaign"));
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->value = $this->_("Unschedule");
+        $field->attr("id+name", "unschedulecampaign");
+        $fieldset->append($field);
+
+        $wrapper->add($fieldset);
+
+        return $wrapper;
+
+    }
+
+    protected function _buildDeleteTab($data){
+
+        $wrapper = new InputfieldWrapper();
+        $wrapper->attr("id", $this->className() . "DeleteCampaign");
+        $wrapper->attr("title", $this->_("Delete Campaign"));
 
         $fieldset = $this->modules->get("InputfieldFieldset");
         $fieldset->label = $this->_("Delete Campaign");
@@ -1038,66 +1137,18 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->attr("id+name", "deletecampaign");
 
         $fieldset->append($field);
-        $wrapper_delete->add($fieldset);
+        $wrapper->add($fieldset);
 
-
-        /**
-         * Add wrappers to form
-         */
-
-        $form->add($wrapper_settings);
-        $form->add($wrapper_content);
-
-
-        if($data['status'] != 'sent' && $data['status'] != 'sending') {
-            $form->add($wrapper_test);
-            $form->add($wrapper_send);
-            $form->add($wrapper_delete);
-
-        } else if($data['status'] == 'sent'){
-            /**
-             * Tab Reports
-             */
-            $retval = $this->mcapi->campaignStats($campaign_id);
-            if(!$this->_checkErrorMC()){
-                $this->error($this->_("Could not retrieve Campaign Stats!"));
-            }
-            $wrapper_stats = new InputfieldWrapper();
-            $wrapper_stats->attr("id", $this->className() . $this->_("CampaignStats"));
-            $wrapper_stats->attr("title", $this->_("Campaign Stats"));
-
-            $fieldset = $this->modules->get("InputfieldFieldset");
-            $fieldset->label = $this->_("Campaign Stats");
-
-            $field = $this->modules->get("InputfieldMarkup");
-            $field->value = print_r($retval);
-
-            $fieldset->append($field);
-            $wrapper_stats->add($fieldset);
-            $form->add($wrapper_stats);
-        }
-
-        /**
-         * update button
-         */
-        $save = $this->modules->get("InputfieldSubmit");
-        $save->value = $this->_("Update Campaign");
-        $save->attr("id+name", "submit");
-        $save->attr("class", $save->class . " head_button_clone");
-
-        $form->add($save);
-
-        return $form;
+        return $wrapper;
     }
 
-    private function _buildAddForm() {
 
+    protected function _buildAddForm() {
 
         $form = $this->modules->get("InputfieldForm");
         $form->action = "../add/";
         $form->method = "post";
         $form->attr('id',$this->className());
-
 
         $field = $this->modules->get("InputfieldText");
         $field->attr('name', "title");
@@ -1160,10 +1211,10 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $listName .= $segmentsCount ? " ( " . sprintf($this->_("%s segments"), $segmentsCount) . " )" : "";
 
                 $field->addOption($l['id'], $listName, array(
-                                "data-from_name" => $l['campaign_defaults']['from_name'],
-                                "data-reply_to" => $l['campaign_defaults']['from_email'],
-                                "data-subject_line" => $l['campaign_defaults']['subject'],
-                            ));
+                        "data-from_name" => $l['campaign_defaults']['from_name'],
+                        "data-reply_to" => $l['campaign_defaults']['from_email'],
+                        "data-subject_line" => $l['campaign_defaults']['subject'],
+                    ));
             }
         }
 
@@ -1266,13 +1317,10 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             }
         }
 
-
         if(count(wire("languages")) > 1){
             $field->notes .= $this->_("We detected multiple languages. Select a Newsletter above to get available URLs and copy paste one of them.");
         }
 
-
-        // $field->notes .= $this->_("Just preview the newsletter in your browser and copy the full public URL into this field.");
         $url_required = 1;
 
         // make the field dependent on the page list select
@@ -1293,7 +1341,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
         $form->add($fieldset);
 
-
         $save = $this->modules->get("InputfieldSubmit");
         $save->value = $this->_("Create Campaign");
         $save->attr('name', "submit");
@@ -1303,7 +1350,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $form->add($save);
         return $form;
     }
-
 
     protected function _getNewsletterPageID($cid) {
         $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$cid';";
@@ -1320,50 +1366,8 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
     }
 
     /**
-     * get MailChimp campaign
-     * @param  string $cid campaign id
-     * @return mixed false on error, campaign if successful
+     * API 1.3 Error checking
      */
-    protected function _getMCCampaign($cid) {
-        $retval = $this->mcapi->campaigns(array('campaign_id' => $cid),0,1);
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('Unable to retrieve Campaign!'));
-            return false;
-        } else {
-            return $retval;
-        }
-    }
-
-    protected function _updateMCCampaign($cid, $key, $value) {
-        $this->mcapi->campaignUpdate($cid, $key, $value);
-        if(!$this->_checkErrorMC()){
-            $this->error($this->_('Campaign update failed'));
-            return false;
-        } else {
-            return true;
-        }
-    }
-
-    protected function _getLists(){
-        $retval = $this->mcapi->lists();
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('"Unable to load lists!"'));
-            return false;
-        } else {
-            return $retval['data'];
-        }
-    }
-
-    protected function _getList($list_id){
-        $retval = $this->mcapi->lists(array('list_id' => $list_id),0,1);
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('"Unable to load list!"'));
-            return false;
-        } else {
-            return $retval['data'];
-        }
-    }
-
     protected function _checkErrorMC($msg = '') {
         if($this->mcapi->errorCode) {
             $this->error(sprintf($this->_("ErrorCode = %s"), $this->mcapi->errorCode));
@@ -1371,6 +1375,52 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             return false;
         }
         return true;
+    }
+
+
+    protected function _insert($newsletter_id, $newsletter_url, $campaign_id, $list_id, $segment_id) {
+        $newsletter_url = $this->sanitizer->url($newsletter_url);
+        if($newsletter_id == 0) $newsletter_id = "NULL";
+        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, newsletter_url, list_id, segment_id, created)
+                VALUES ('$campaign_id',$newsletter_id,'$newsletter_url','$list_id', '$segment_id', now())";
+        $result = $this->db->query($query);
+        $this->message($this->_("New Campaign inserted/updated"));
+        return @mysqli_insert_id($this->db);
+    }
+
+    protected function _update($newsletter_id, $newsletter_url, $campaign_id, $list_id, $segment_id) {
+        $newsletter_url = $this->sanitizer->url($newsletter_url);
+        if($newsletter_id == 0) $newsletter_id = "NULL";
+        $values = "newsletter_id=" . $newsletter_id . ",";
+        $values .= "newsletter_url='" . $newsletter_url . "',";
+        $values .= "list_id='" . $list_id . "',";
+        $values .= "segment_id='" . $segment_id . "'";
+        $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
+        $result = $this->db->query($query);
+        $this->message($this->_("Campaign updated"));
+        return $result;
+    }
+
+    protected function _delete($campaign_id) {
+        $query = "DELETE FROM {$this->className} WHERE campaign_id='$campaign_id'";
+        $result = $this->db->query($query);
+        $this->message($this->_("Campaign deleted from DB"));
+        return $result;
+    }
+
+    protected function _exists($campaign_id) {
+        $query = "SELECT * FROM {$this->className()} WHERE campaign_id='$campaign_id'";
+        $result = $this->db->query($query);
+        if($result->num_rows == 1) return true;
+        return false;
+    }
+
+    public function dateGmtToLocal($gmtDate, $fromFormat = 'Y-m-d H:i:s', $toFormat = "Y-m-d H:i"){
+        // echo $gmtDate; exit();
+        $utc_date = DateTime::createFromFormat($fromFormat, $gmtDate, new DateTimeZone('UTC'));
+        $date = $utc_date;
+        $date->setTimeZone(new DateTimeZone(date_default_timezone_get()));
+        return $date->format($toFormat);
     }
 
     public function install() {

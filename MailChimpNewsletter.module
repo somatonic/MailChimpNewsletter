@@ -10,6 +10,12 @@
  * http://www.processwire.com
  * http://www.ryancramer.com
  *
+ *
+ * Changelog:
+ *
+ *  v 0.0.4 - 17.06.2016 Philipp Urlich
+ *  - Refactoring, removed old code
+ *  - Added found campaigns as table view to page edit form MailChimp Tab
  */
 
 
@@ -30,7 +36,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 3,
+            'version' => 4,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -130,49 +136,6 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         }
     }
 
-    /**
-     * get MailChimp campaign
-     * @param  string $cid campaign id
-     * @return mixed false on error, campaign if successful
-     */
-    protected function _getMCCampaign($cid) {
-        $retval = $this->mcapi->campaigns(array('campaign_id' => $cid),0,1);
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('Unable to retrieve Campaign!'));
-            return false;
-        } else {
-            return $retval;
-        }
-    }
-
-    protected function _updateMCCampaign($cid, $key, $value) {
-        $this->mcapi->campaignUpdate($cid, $key, $value);
-        if(!$this->_checkErrorMC()){
-            $this->error($this->_('Campaign update failed'));
-            return false;
-        } else {
-            return true;
-        }
-    }
-
-    protected function _getLists(){
-        $retval = $this->mcapi->lists();
-        if(!$this->_checkErrorMC()) {
-            $this->error($this->_('"Unable to load lists!"'));
-            return false;
-        } else {
-            return $retval['data'];
-        }
-    }
-
-    protected function _checkErrorMC() {
-        if($this->mcapi->errorCode) {
-            $this->error(sprintf($this->_("ErrorCode = %s"), $this->mcapi->errorCode));
-            $this->error(sprintf($this->_("ErrorMessage = %s"), $this->mcapi->errorMessage));
-            return false;
-        }
-        return true;
-    }
 
     /**
      * MailChimp Helpers
@@ -198,8 +161,6 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
     /**
      * Hook to add Mailchimp Newsletter tab after "Content" Tab
-     * @param  [type] $event [description]
-     * @return [type]        [description]
      */
     public function hookPageEditFormContent($event) {
         $page = $event->object->getPage();
@@ -209,14 +170,10 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     }
 
     public function isNewsletterPage($page){
-        // if(!$this->newsletter_template_id) {
-        //     return false;
-        // }
+
         if(!count($this->newsletter_templates)) {
             return false;
         }
-        // $nltpl = wire("templates")->get($this->newsletter_template_id);
-        // print_r($this->newsletter_templates);
         $nltpl = wire("templates")->find("id=" . implode("|", $this->newsletter_templates));
         if(!$nltpl->count) return false;
         if(!$page->is("template=$nltpl")) return false;
@@ -230,7 +187,6 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         if(!$this->isNewsletterPage($page)) return;
 
         if(!$this->wire("user")->hasPermission("mailchimp")) return;
-        // $campaignFound = $page->id;
 
         $form = $event->return;
         $modules = wire("modules");
@@ -238,16 +194,23 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         $fs->attr("title", "MailChimp Newsletter");
         $fs->id = $this->className();
 
-
         $f = $modules->InputfieldMarkup;
         $f->label = $this->_("Mailchimp campaign(s) using this page");
 
+        // render found campaigns using the campaigns table method from MailChimpCampaigns
+        // for convenience
         $campaignsFound = $this->_findCampaignsIDByPageID($page->id);
         if($campaignsFound) {
-            $campaignsEditBaseUrl = wire("config")->urls->admin . "mailchimp-newsletter/mailchimp-campaigns/edit/";
+            $campaignsData = array();
             foreach($campaignsFound as $camp){
-                $f->value .= "<p><a class='ui-widget ui-button ui-state-default' href='$campaignsEditBaseUrl?id={$camp['campaign_id']}' target='_blank'>" . $this->_("go to MailChimp campaign") . "</a> : URL: " . $camp['newsletter_url'] . "</p>";
+                $retval = $this->call("campaigns/list", array(
+                        "filters" => array("campaign_id" => $camp['campaign_id']),
+                    ));
+                if($retval) $campaignsData[] = $retval['data'][0];
             }
+            $campTable = $this->modules->MailChimpCampaigns->_campaignsTable($campaignsData);
+            $f->value = $campTable->render();
+
         } else {
             $f->value = $this->_("No campaign found for this page. Create one one using the buttons below.");
         }
@@ -260,16 +223,22 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         $createUrls = $this->getNewsletterUrlsArray($page);
         $campaignsCreateBaseUrl = wire("config")->urls->admin . "mailchimp-newsletter/mailchimp-campaigns/add/";
         $f->description = $this->_("Click on the button to create a new campaign using this page");
-        foreach($createUrls as $key => $url){
-            $lang = wire("languages")->get($url['lang']);
-            $langName = $lang->id ? "($lang->title)" : "";
-            $f->value .= "<p><a class='ui-widget ui-button ui-state-default' href='$campaignsCreateBaseUrl?nlid=$page->id&nllang={$url['lang']}&amp;nlurl={$url['url']}' target='_blank' href=''>" . $this->_("create campaign") . " $langName</a> : URL: {$url['url']}</p>";
+
+        if(wire("languages") && count(wire("languages"))){
+            foreach($createUrls as $key => $url){
+                $lang = wire("languages")->get($url['lang']);
+                $langName = $lang->id ? "($lang->title)" : "";
+                $f->value .= "<p><a class='ui-widget ui-button ui-state-default' href='$campaignsCreateBaseUrl?nlid=$page->id&nllang={$url['lang']}&amp;nlurl={$url['url']}' target='_blank' href=''>" . $this->_("create campaign") . " $langName</a> : URL: {$url['url']}</p>";
+            }
+        } else {
+            foreach($createUrls as $key => $url){
+                // $lang = wire("languages")->get($url['lang']);
+                // $langName = $lang->id ? "($lang->title)" : "";
+                $f->value .= "<p><a class='ui-widget ui-button ui-state-default' href='$campaignsCreateBaseUrl?nlid=$page->id&nllang={$url['lang']}&amp;nlurl={$url['url']}' target='_blank' href=''>" . $this->_("create campaign") . "</a> : URL: {$url['url']}</p>";
+            }
         }
-        // $f->value = implode("|", $createUrls);
+
         $fs->add($f);
-
-        // $tabs = $event->object->getTabs();
-
         $fieldsetContent = $form->find("id^=ProcessPageEdit")->first();
         $form->add($fs);
         $form->insertAfter($fs, $fieldsetContent);
@@ -279,7 +248,8 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     public function getNewsletterUrlsArray($page){
 
         $urls = array();
-        if(count(wire("languages")) > 1){
+
+        if(wire("languages") && count(wire("languages")) > 1){
             $langSaved = wire("user")->language;
             foreach(wire("languages") as $lang){
                 wire("user")->language = $lang;
@@ -291,7 +261,11 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
             }
             wire("user")->language = $langSaved;
         } else {
-            $urls[] = array('lang' => 0, 'url' => $page->httpUrl);
+            if(wire("modules")->isInstalled("Multisite")){
+                $urls[] = array('lang' => 0, 'url' => wire("modules")->Multisite->getDomainUrl($page));
+            } else {
+                $urls[] = array('lang' => 0, 'url' => $page->httpUrl);
+            }
         }
 
         return $urls;
@@ -362,14 +336,6 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         $field->attr('value', isset($data['newsletter_parent_id']) ? $data['newsletter_parent_id'] : "");
         $field->label = "Newsletter Parent Page ID";
         $fields->append($field);
-
-        // $field = $modules->get("InputfieldText");
-        // $field->attr('name', 'newsletter_template_id');
-        // $field->attr('size', 10);
-        // $field->attr('value', isset($data['newsletter_template_id']) ? $data['newsletter_template_id'] : "");
-        // $field->label = "Newsletter Template ID you want to be able to select";
-        // $field->required = 0;
-        // $fields->append($field);
 
         $field = $modules->get("InputfieldAsmSelect");
         $field->attr('name', 'newsletter_templates');
