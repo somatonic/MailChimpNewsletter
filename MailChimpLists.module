@@ -14,6 +14,10 @@
  *
  */
 
+// Include composer dependencies
+require __DIR__ . '/vendor/autoload.php';
+
+use Carbon\Carbon;
 
 class MailChimpLists extends Process implements ConfigurableModule {
 
@@ -409,10 +413,16 @@ class MailChimpLists extends Process implements ConfigurableModule {
                     ));
 
         $confirmText = $this->_("Unsubscribe this member?");
+
+        // Get PW timezone
+        $tz = date_default_timezone_get();
+
         foreach($retval["members"] as $member){
+            $last_changed = Carbon::parse($member["last_changed"]);
             $table->row(array(
                         $member["email_address"],
-                        $member["last_changed"],
+                        //$member["last_changed"],
+                        $last_changed->setTimezone($tz)->format('F j, Y H:i T'),
                         "<a href='../unsubscribe/?id={$list_id}&email={$member["email_address"]}' onclick='return confirm(\"$confirmText\")'>" . $this->_("unsubscribe") . "</a>",
                     ));
         }
