@@ -23,6 +23,9 @@
  */
 
 
+// Include composer dependencies
+require __DIR__ . '/vendor/autoload.php';
+
 // include API 3.0 minimal Wrapper
 require_once( dirname(__FILE__) . "/MailChimp.php");
 
@@ -733,7 +736,8 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
     protected function _buildEditForm($data = array()) {
 
-        $this->modules->get('JqueryFancybox');
+        //$this->modules->get('JqueryFancybox');
+        
 
         $campaign_id = $data['id'];
         $is_scheduled = $data['status'] == "schedule";

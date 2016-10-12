@@ -75,23 +75,29 @@ var MailchimpCampaigns = {
 
     bindNewsletterPreview: function(){
 
+        var iframeSrc = null, buttonTitle = null;
+
         $('#MC_NewsletterPreview a button').bind('mousedown',function(e){
             e.stopPropagation();
             e.preventDefault();
-            $(this).parent().addClass("iframe");
-            var h = $(window).height()-65;
-            var w = $(window).width() > 1150 ? 1150 : $(window).width()-100;
-            $(this).parent().fancybox({
-                hideOnContentClick: false,
-                centerOnScroll: false,
-                frameWidth: w,
-                frameHeight: h
-            }).trigger('click');
+
+            iframeSrc = $(this).parent().attr('href');
+            buttonTitle = $(this).val();
+
             return false;
-         });
+        });
+
         $('#MC_NewsletterPreview a').click(function(e){
+
             e.preventDefault();
             e.stopPropagation();
+
+            $.fancybox({
+                href: iframeSrc,
+                title: buttonTitle + ' Preview',
+                type: 'iframe',
+            });
+
             return false;
         });
 

@@ -1,0 +1,6 @@
+{
+    "require": {
+        "symfony/var-dumper": "^3.1",
+        "newerton/fancy-box": "dev-master"
+    }
+}
