@@ -18,6 +18,8 @@
  *  - Added found campaigns as table view to page edit form MailChimp Tab
  */
 
+// Include composer dependencies
+require __DIR__ . '/vendor/autoload.php';
 
 require_once( dirname(__FILE__) . "/MCAPI.class.php");
 require_once( dirname(__FILE__) . "/MailChimp.php");
@@ -75,6 +77,16 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         $this->addHookAfter("ProcessPageEdit::buildForm", $this, "hookPageEditForm");
         $this->addHookAfter("ProcessPageEdit::buildFormContent", $this, "hookPageEditFormContent");
+
+        // Load jQuery Fancybox 2
+        $fbPath = 'vendor/newerton/fancy-box';
+
+        // load styles dependencies
+        $this->config->styles->add($this->config->urls->MailChimpNewsletter . $fbPath . '/source/jquery.fancybox.css');
+
+        // load scripts dependencies
+        $this->config->scripts->add($this->config->urls->MailChimpNewsletter . $fbPath . '/source/jquery.fancybox.pack.js');
+
     }
 
     /**
