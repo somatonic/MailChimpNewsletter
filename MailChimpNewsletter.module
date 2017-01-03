@@ -10,8 +10,10 @@
  * http://www.processwire.com
  * http://www.ryancramer.com
  *
- *
  * Changelog:
+ *
+ *  v.0.0.5
+ *  - update to API 3.0
  *
  *  v 0.0.4 - 17.06.2016 Philipp Urlich
  *  - Refactoring, removed old code
@@ -19,9 +21,7 @@
  */
 
 
-require_once( dirname(__FILE__) . "/MCAPI.class.php");
 require_once( dirname(__FILE__) . "/MailChimp.php");
-require_once( dirname(__FILE__) . "/MailChimp_v2.0.php");
 
 
 class MailChimpNewsletter extends WireData implements Module, ConfigurableModule {
@@ -36,7 +36,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 4,
+            'version' => 5,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -49,29 +49,12 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     }
 
 
-    // $apikey;
-    // public $mailchimp;
-    // public $newsletter_parent_id;
-    // public $mcapi;
-
-    public function __construct(){
-        // $this->apikey = $this->data('apikey');
-        // $this->newsletter_parent_id = $this->get('newsletter_parent_id');
-
-    }
+    public function __construct() { }
 
     public function init() {
-        $this->mcapi = new MCAPI($this->apikey);
-
-        // $this->apikey = $this->data['apikey'];
-        // $this->newsletter_parent_id = $this->data['newsletter_parent_id'];
-        // $this->mcapi = new MCAPI($this->apikey);
 
         // MailChimp REST API 3.0
         $this->mailchimp = new Drewm\MailChimp\MailChimp($this->apikey);
-
-        // MailChimp API 2.0
-        $this->mailchimp2 = new MailChimp($this->apikey);
 
         $this->addHookAfter("ProcessPageEdit::buildForm", $this, "hookPageEditForm");
         $this->addHookAfter("ProcessPageEdit::buildFormContent", $this, "hookPageEditFormContent");
@@ -97,22 +80,12 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
             wire("log")->save("mailchimp", ($res['status'] . " - " . $res['title'] . " - " . $res['detail'] . " - Errors: " . print_r($res['errors'], true)));
             $res['success'] = false;
         } else {
-            wire("log")->save("mailchimp", ($res['status'] . " - " . $res['title'] . " - " . $res['detail'] . " - Errors: " . print_r($res['errors'], true)));
+            // wire("log")->save("mailchimp", ($res['status'] . " - " . $res['title'] . " - " . $res['detail'] . " - Errors: " . print_r($res['errors'], true)));
             $res['success'] = true;
         }
         return $res;
     }
 
-
-    public function call($method, $args = array()){
-        $res = $this->mailchimp2->call($method, $args);
-        wire("log")->save("mailchimp_v2", "Action: $method, Args: " . print_r($args, true). " | Res: " . print_r($res, true));
-        if($res && isset($res['status']) && $res['status'] == "error"){
-            $this->error($res['status'] . " code: " . $res['code'] . " - " . $res['name'] . " - " . $res['error']);
-            // return false;
-        }
-        return $res;
-    }
 
     protected function _getNewsletterPageID($id) {
         $query = "SELECT * FROM {$this->className()} WHERE campaign_id = '$id';";
@@ -138,26 +111,27 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
 
     /**
-     * MailChimp Helpers
+     * MailChimp Helpers (deprecated)
+     * TODO: upgrade to v3
      */
 
-    public function subscribeListEmail($listID, $email, $mergevars = NULL){
-        $email = $this->sanitizer->email($email);
-        if(!$email) throw new WireException("No Email specified");
-        if(!$listID) throw new WireException("No ListID specified");
+    // public function subscribeListEmail($listID, $email, $mergevars = NULL) {
+    //     $email = $this->sanitizer->email($email);
+    //     if(!$email) throw new WireException("No Email specified");
+    //     if(!$listID) throw new WireException("No ListID specified");
 
-        $return = array();
+    //     $return = array();
 
-        if($this->mcapi->listSubscribe($listID, $email, $mergevars) === true) {
-            $return["success"] = 1;
-            $return["message"] = "<p class='ui-state-highlight'>" . $this->_("To complete the subscription process, please click the link in the email we just sent you.") ."</p>";
-        } else {
-            // An error ocurred, return error message
-            $return["success"] = 0;
-            $return["message"] = $this->mcapi->errorMessage;
-        }
-        return $return;
-    }
+    //     if($this->mcapi->listSubscribe($listID, $email, $mergevars) === true) {
+    //         $return["success"] = 1;
+    //         $return["message"] = "<p class='ui-state-highlight'>" . $this->_("To complete the subscription process, please click the link in the email we just sent you.") ."</p>";
+    //     } else {
+    //         // An error ocurred, return error message
+    //         $return["success"] = 0;
+    //         $return["message"] = $this->mcapi->errorMessage;
+    //     }
+    //     return $return;
+    // }
 
     /**
      * Hook to add Mailchimp Newsletter tab after "Content" Tab
@@ -203,10 +177,8 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
         if($campaignsFound) {
             $campaignsData = array();
             foreach($campaignsFound as $camp){
-                $retval = $this->call("campaigns/list", array(
-                        "filters" => array("campaign_id" => $camp['campaign_id']),
-                    ));
-                if($retval) $campaignsData[] = $retval['data'][0];
+                $retval = $this->_get("campaigns/{$camp['campaign_id']}");
+                if($retval) $campaignsData[] = $retval;
             }
             $campTable = $this->modules->MailChimpCampaigns->_campaignsTable($campaignsData);
             $f->value = $campTable->render();

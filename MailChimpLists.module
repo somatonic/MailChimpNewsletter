@@ -12,6 +12,11 @@
  * http://www.processwire.com
  * http://www.ryancramer.com
  *
+ * Changelog:
+ *
+ * v0.0.3
+ *     - update to Mailchimp v3
+ *
  */
 
 
@@ -27,7 +32,7 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Lists',
-            'version' => 2,
+            'version' => 4,
             'summary' => 'Manage MailChimp Lists',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -394,8 +399,6 @@ class MailChimpLists extends Process implements ConfigurableModule {
             "status" => "subscribed",
             ));
 
-        // print_r($retval);
-
         $membersTotal = $retval['total_items'];
 
         $preview->value .= sprintf($this->_("Total member count: %s"), $membersTotal);
@@ -496,23 +499,12 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $form->add($wrapper_beamer);
 
 
-
         $field = $this->modules->get("InputfieldSubmit");
         $field->attr("name","submit");
         $field->attr("value", $this->_("save"));
 
         $form->add($field);
 
-
-        /**
-         * update button
-         */
-        // $save = $this->modules->get("InputfieldSubmit");
-        // $save->value = $this->_("Update List");
-        // $save->attr("id+name", "submit");
-        // $save->attr("class", $save->class . " head_button_clone");
-
-        // $form->add($save);
         return $form;
     }
 
@@ -549,25 +541,6 @@ _END;
     }
 
     public static function getModuleConfigInputfields(array $data) {
-        // $data = array_merge(self::$defaults, $data);
 
-        // $fields = new InputfieldWrapper();
-        // $modules = wire("modules");
-
-        // $field = $modules->get("InputfieldText");
-        // $field->attr('name', 'apikey');
-        // $field->attr('size', 40);
-        // $field->attr('value', $data['apikey']);
-        // $field->label = "MailChimp API Key";
-        // $fields->append($field);
-
-        // $field = $modules->get("InputfieldText");
-        // $field->attr('name', 'remoteurl');
-        // $field->attr('size', 0);
-        // $field->attr('value', $data['remoteurl']);
-        // $field->label = "URL to webservice";
-        // $fields->append($field);
-
-        // return $fields;
     }
 }

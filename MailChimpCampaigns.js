@@ -12,7 +12,6 @@ var MailchimpCampaigns = {
         $("#breadcrumbs ul.nav").append(this.spinner);
         this.initListSelect();
         this.initFolderSelect();
-        this.bindNewsletterPreview();
         this.bindSelectNewsletterPage();
         this.spinner.fadeOut();
     },
@@ -21,7 +20,7 @@ var MailchimpCampaigns = {
         var that = this;
         if($("#Inputfield_newsletter_id").length){
             $("#Inputfield_newsletter_id").on("change", function(){
-                console.log($(this).val());
+                // console.log($(this).val());
                 $.ajax({
                     url: config.MailChimp.urls.MailChimpCampaigns,
                     type: "post",
@@ -31,7 +30,7 @@ var MailchimpCampaigns = {
                     },
                     dataType: "json",
                     success: function(data){
-                        console.log(data);
+                        // console.log(data);
                         $('#Inputfield_newsletter_url').prev("p").html(data.body);
                         $('#Inputfield_newsletter_url').val(data.urls[0]['url']);
                     }
@@ -57,9 +56,9 @@ var MailchimpCampaigns = {
         // on change of list select, populate list defaults to fields
         if($("select[name='list_id']").length){
             $("select[name='list_id']").on("change", function(){
-                console.log($(this).val());
+                // console.log($(this).val());
                 var $sel = $(this).find(":selected");
-                console.log($sel.data("from_name"));
+                // console.log($sel.data("from_name"));
                 var fromName = $sel.data("from_name");
                 var fromEmail = $sel.data("reply_to");
                 var emailSubject = $sel.data("subject_line");
@@ -72,30 +71,6 @@ var MailchimpCampaigns = {
         }
 
     },
-
-    bindNewsletterPreview: function(){
-
-        $('#MC_NewsletterPreview a button').bind('mousedown',function(e){
-            e.stopPropagation();
-            e.preventDefault();
-            $(this).parent().addClass("iframe");
-            var h = $(window).height()-65;
-            var w = $(window).width() > 1150 ? 1150 : $(window).width()-100;
-            $(this).parent().fancybox({
-                hideOnContentClick: false,
-                centerOnScroll: false,
-                frameWidth: w,
-                frameHeight: h
-            }).trigger('click');
-            return false;
-         });
-        $('#MC_NewsletterPreview a').click(function(e){
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-        });
-
-    }
 
 };
 
