@@ -12,12 +12,27 @@
  *
  * Changelog:
  *
+ *  v.0.0.6
+ *  - fix error on first install when no apikey is yet configured
+ *  - add support for multi apikey per role added via site config.php
+ *
  *  v.0.0.5
  *  - update to API 3.0
  *
  *  v 0.0.4 - 17.06.2016 Philipp Urlich
  *  - Refactoring, removed old code
  *  - Added found campaigns as table view to page edit form MailChimp Tab
+ *
+ *
+ * MailChimp API keys by roles
+ * ------------------------------------------------------------------------------------------------------------------------
+ * Work arround to work with multiple api keys (= MailChimp accounts) in module «MailChimp Newsletter» by Soma
+ * add array items with role-name => apikey for every role
+ *
+ * $config->mailchimpKeysByRoles = array(
+ *   "newsletter-a" => "878b077dd60a3k6caed59540fa9770b3-us14",
+ *   "newsletter-b" => "6536025a0d6a4cd0f6ffebc06b1da985-us13",
+ * );
  */
 
 
@@ -36,7 +51,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 5,
+            'version' => 6,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -53,11 +68,35 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
     public function init() {
 
-        // MailChimp REST API 3.0
-        $this->mailchimp = new Drewm\MailChimp\MailChimp($this->apikey);
+        $config = $this->wire->config;
+        $user = $this->wire->user;
 
-        $this->addHookAfter("ProcessPageEdit::buildForm", $this, "hookPageEditForm");
-        $this->addHookAfter("ProcessPageEdit::buildFormContent", $this, "hookPageEditFormContent");
+        // Get role based MailChimp API key, if $config->mailchimpKeysByRoles is an array
+        if(is_array($config->mailchimpKeysByRoles)) {
+            foreach($config->mailchimpKeysByRoles as $role => $key) {
+                if($user->hasRole($role)) {
+                    $this->apikey = $key;
+                    break;
+                }
+            }
+        }
+
+        if($this->apikey != '') {
+            // MailChimp REST API 3.0
+            $this->mailchimp = new Drewm\MailChimp\MailChimp($this->apikey);
+
+            // add hook for rendering mailchimp tab on newsletter pages
+            $this->addHookAfter("ProcessPageEdit::buildForm", $this, "hookPageEditForm");
+            $this->addHookAfter("ProcessPageEdit::buildFormContent", $this, "hookPageEditFormContent");
+
+        } else {
+
+            if(!$this->session->get('mcKeyError') && $this->wire->page->name != 'login') {
+                $this->error(__("No MailChimp API key defined. Do this in MailChimpNewsletter module settings or uninstall the MailChimpNewsletter module."));
+                $this->wire->session->set('mcKeyError', 1);
+            }
+
+        }
     }
 
     /**
