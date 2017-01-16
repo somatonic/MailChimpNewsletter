@@ -13,6 +13,8 @@
  * http://www.ryancramer.com
  *
  * Changelog:
+ * v0.0.4
+ *     - hide member subscription, add member search
  *
  * v0.0.3
  *     - update to Mailchimp v3
@@ -47,7 +49,10 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
     public function init() {
         parent::init();
-        $this->modules->get("JqueryWireTabs");
+        $tabs = $this->modules->get("JqueryWireTabs");
+        wire('config')->js('JqueryWireTabs', array(
+            'rememberTabs' => (int) 1,
+            ));
         $this->mailchimp = $this->modules->get("MailChimpNewsletter");
         $this->apikey = $this->mailchimp->apikey;
     }
@@ -384,6 +389,15 @@ class MailChimpLists extends Process implements ConfigurableModule {
         /**
          * Tab Emails
          */
+
+        $isSearch = false;
+        $search_query = "";
+        if($this->input->search_query_email) {
+            $isSearch = true;
+            $search_query = $this->sanitizer->text($this->input->search_query_email);
+            $this->input->whitelist("search_query_email", $search_query);
+        }
+
         $wrapper_list = new InputfieldWrapper();
         $wrapper_list->attr("id", $this->className() . "ListMembers");
         $wrapper_list->attr("title", $this->_("List Members"));
@@ -393,11 +407,25 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $membersLimit = 20;
         $membersOffset = ($this->input->pageNum - 1) * $membersLimit;
 
-        $retval = $this->mailchimp->_get("lists/{$list_id}/members", array(
-            "offset" => $membersOffset,
-            "count" => 20,
-            "status" => "subscribed",
-            ));
+        if(!$isSearch){
+
+            $retval = $this->mailchimp->_get("lists/{$list_id}/members", array(
+                "offset" => $membersOffset,
+                "count" => $membersLimit,
+                "status" => "subscribed",
+                ));
+
+        } else {
+            $membersLimit = $this->_("all");
+            $retval = $this->mailchimp->_get("search-members", array(
+                "list_id" => $list_id,
+                "query" => $search_query,
+                ));
+
+            // print_r($retval);
+            $retval = $retval["full_search"];
+        }
+
 
         $membersTotal = $retval['total_items'];
 
@@ -424,33 +452,33 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         $this->input->whitelist("id", $list_id);
         $preview->value .= $table->render();
-        $pagination = new PageArray();
-        $pagination->setTotal($membersTotal);
-        $pagination->setLimit($membersLimit);
-        $pagination->setStart($membersOffset);
 
-        $preview->value .= $pagination->renderPager();
+        if(!$isSearch){
+            $pagination = new PageArray();
+            $pagination->setTotal($membersTotal);
+            $pagination->setLimit($membersLimit);
+            $pagination->setStart($membersOffset);
 
+            $preview->value .= $pagination->renderPager();
+        }
 
-        $fieldset = $this->modules->get("InputfieldFieldset");
-        $fieldset->label = "Subscribe an E-mail Address";
-        $fieldset->collapsed = Inputfield::collapsedYes;
+        $fieldsetSubscribe = $this->modules->get("InputfieldFieldset");
+        $fieldsetSubscribe->label = $this->_("Subscribe an E-mail Address");
+        $fieldsetSubscribe->collapsed = Inputfield::collapsedYes;
 
         $field = $this->modules->get("InputfieldEmail");
         $field->label = $this->_("E-mail Address");
         $field->attr("name", "email");
-        $fieldset->add($field);
-
+        $fieldsetSubscribe->add($field);
 
         if($data['stats']['merge_field_count']) {
 
             $mergeFields = $this->mailchimp->_get("lists/{$list_id}/merge-fields");
 
-            // print_r($mergeFields);
-
             foreach($mergeFields['merge_fields'] as $mergefield){
                 $type = ucfirst($mergefield['type']);
                 if($type == "Radio") $type = "Radios";
+                if($type == "Address") $type = "Text";
                 $field = $this->modules->get("Inputfield{$type}");
                 $field->label = $mergefield['name'];
                 $field->attr("name", "merge_" . $mergefield['tag']);
@@ -459,7 +487,7 @@ class MailChimpLists extends Process implements ConfigurableModule {
                         $field->addOption($choice, $choice); // value is label (mailchimp)
                     }
                 }
-                $fieldset->add($field);
+                $fieldsetSubscribe->add($field);
             }
         }
 
@@ -472,7 +500,7 @@ class MailChimpLists extends Process implements ConfigurableModule {
                 $name = ($lang->isDefault()) ? "de" : $lang->name;
                 $field->addOption($name, "$lang->title");
             }
-            $fieldset->add($field);
+            $fieldsetSubscribe->add($field);
         }
 
         $field = $this->modules->get("InputfieldSelect");
@@ -482,22 +510,44 @@ class MailChimpLists extends Process implements ConfigurableModule {
                            'html' => 'HTML',
                            'text' => 'Text'
                            ));
-        $fieldset->add($field);
+        $fieldsetSubscribe->add($field);
 
         $field = $this->modules->get("InputfieldSubmit");
         $field->attr("name", "subscribe");
         $field->attr("value", "subscribe");
-        $fieldset->add($field);
+        $fieldsetSubscribe->add($field);
 
+        /**
+         * Search subscribers
+         *
+         */
+        $fieldsetSearch = $this->modules->get("InputfieldFieldset");
+        $fieldsetSearch->label = $this->_("Search Members");
+        if(!$search_query) $fieldsetSearch->collapsed = Inputfield::collapsedYes;
 
-        $wrapper_list->add($fieldset);
+        $field = $this->modules->get("InputfieldText");
+        $field->label = $this->_("E-mail");
+        $field->attr("name", "search_query_email");
+        $field->attr("value", $search_query);
+        $fieldsetSearch->add($field);
+
+        $field = $this->modules->get("InputfieldSubmit");
+        $field->attr("name", "search");
+        $field->attr("value", $this->_("search"));
+        $fieldsetSearch->add($field);
+
+        /**
+         * Add wrappers and fieldsets
+         */
+
+        // $wrapper_list->add($fieldsetSubscribe);
+        $wrapper_list->add($fieldsetSearch);
         $wrapper_list->add($preview);
 
         $form->add($wrapper_settings);
         $form->add($wrapper_list);
         $form->add($wrapper_subscription);
         $form->add($wrapper_beamer);
-
 
         $field = $this->modules->get("InputfieldSubmit");
         $field->attr("name","submit");
