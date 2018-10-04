@@ -14,6 +14,8 @@
  *
  *
  * Changelog:
+ *  v.0.0.6
+ *  - bug fix with missing argument for segment id on campaing add
  *
  *  v.0.0.5
  *  - update to API 3.0
@@ -43,7 +45,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Campaigns',
-            'version' => 5,
+            'version' => 6,
             'summary' => 'Manage MailChimp Campaigns',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -389,7 +391,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $opts = array(
                     'type' => "regular",
                     'recipients' => array(
-                        'list_id' => $form->get("list_id")->value,
+                        'list_id' => $form->get("list_id")->value
                         ),
                     'settings' => array(
                         'authenticate' => true,
@@ -407,18 +409,16 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                         ),
                     );
 
-                if($form->get("list_id")->value) {
-                    $listSegmentName = "segment_" . $form->get("list_id")->value;
-                    if($form->get($listSegmentName) && $form->get($listSegmentName)->value){
-                        $opts['recipients']['segment_opts']['saved_segment_id'] = (int) $form->get($listSegmentName)->value;
-                    }
+                $listSegmentID = $form->get("segment_" . $form->get("list_id")->value)->value;
+                if($listSegmentID) {
+                    $opts['recipients']['segment_opts']['saved_segment_id'] = (int) $listSegmentID;
                 }
 
                 $res = $this->mailchimp->_post("campaigns", $opts);
 
                 if($res && isset($res['id'])){
                     $this->mailchimp->_put("campaigns/{$res['id']}/content", array("url" => $newsletterPageUrl));
-                    $this->_insert($newsletterPageID, $newsletterPageUrl, $res['id'], $opts['recipients']['list_id']);
+                    $this->_insert($newsletterPageID, $newsletterPageUrl, $res['id'], $opts['recipients']['list_id'], $listSegmentID);
                     $this->message(sprintf($this->_("New campaign '%s' created on MailChimp"), $opts['settings']['title']));
                     $this->session->redirect("../edit/?id={$res['id']}");
                 } else {
