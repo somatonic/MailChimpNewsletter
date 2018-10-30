@@ -1376,6 +1376,9 @@ _END;
     }
 
     public static function getModuleConfigInputfields(array $data) {
-
+        if($data) {} // ignore
+        $inputfields = new InputfieldWrapper();
+        return $inputfields;
     }
+
 }
