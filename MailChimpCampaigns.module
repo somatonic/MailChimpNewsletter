@@ -57,7 +57,8 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
             'singular' => true,
             'permission' => "mailchimp",
             'permissions' => array("mailchimp" => "MailChimp Newsletter"),
-            'requires' => array('MailChimpNewsletter')
+            'requires' => array('MailChimpNewsletter'),
+            'icon' => "envelope",
         );
     }
 

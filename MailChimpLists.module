@@ -46,7 +46,8 @@ class MailChimpLists extends Process implements ConfigurableModule {
             'singular' => true,
             'permission' => "mailchimp",
             'permissions' => array("mailchimp" => "MailChimp Newsletter"),
-            'requires' => array('MailChimpNewsletter')
+            'requires' => array('MailChimpNewsletter'),
+            'icon' => "users",
         );
     }
 
