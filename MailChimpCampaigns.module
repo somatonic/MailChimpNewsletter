@@ -1327,8 +1327,21 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
             $field = $this->modules->get("InputfieldURL");
             $field->attr('name',"newsletter_url");
             $field->entityEncodeText = false;
+            $field->required = 1;
             $field->label = $this->_("Newsletter URL");
             $field->description = $this->_("The public URL for the email content. This will be populated automaticly when selecting the newsletter page above.");
+            if(wire("input")->get->nlid) {
+                $nlid = (int) wire("input")->get->nlid;
+                $nlPage = wire("pages")->get($nlid);
+                if($nlPage->id){
+                    $field->description .= "<br>" . $this->_("Available URLs for this page") . ":";
+                    $urls = wire("modules")->MailChimpNewsletter->getNewsletterUrlsArray($nlPage);
+                    foreach($urls as $langID => $url){
+                        $field->description .= "<br>" . $url['url'];
+                    }
+                }
+            }
+            $field->attr("value", wire("input")->get->nlurl ? wire("input")->get->nlurl : "");
         }
 
         if($this->contentType == "html"){
@@ -1340,29 +1353,13 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
                 foreach($this->wire("languages") as $lang) {
                     $field->addOption($lang->id, $lang->title);
                 }
+                $field->required = 1;
                 $field->description = $this->_("The language you want to use from this newsletter.");
+                $field->attr("value", wire("input")->get->nllang ? wire("input")->get->nllang : "");
             }
         }
 
-        if(wire("input")->get->nlid) {
-            $nlid = (int) wire("input")->get->nlid;
-            $nlPage = wire("pages")->get($nlid);
-            if($nlPage->id){
-                $field->description .= "<br>" . $this->_("Available URLs for this page") . ":";
-                $urls = wire("modules")->MailChimpNewsletter->getNewsletterUrlsArray($nlPage);
-                foreach($urls as $langID => $url){
-                    $field->description .= "<br>" . $url['url'];
-                }
-            }
-        }
-
-
-        $url_required = 1;
-
-        $field->required = $url_required;
-        $field->attr("value", wire("input")->get->nlurl ? wire("input")->get->nlurl : "");
         $fieldset->add($field);
-
         $form->add($fieldset);
 
         $save = $this->modules->get("InputfieldSubmit");
