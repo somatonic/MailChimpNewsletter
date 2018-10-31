@@ -14,6 +14,11 @@
  *
  *
  * Changelog:
+ *  v.0.0.7
+ *  - added config option to send newsletter html to mailchimp instead of the url
+ *    language now can be set via radio options if set to "html"
+ *  - added "count" show 100 (MC API call) to lists calls (default only 10)
+ *
  *  v.0.0.6
  *  - bug fix with missing argument for segment id on campaing add
  *
@@ -33,7 +38,7 @@
 // include API 3.0 minimal Wrapper
 require_once( dirname(__FILE__) . "/MailChimp.php");
 
-class MailChimpCampaigns extends Process implements ConfigurableModule {
+class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
 
     /**
      * getModuleInfo is a module required by all modules to tell ProcessWire about them
@@ -45,7 +50,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Campaigns',
-            'version' => 6,
+            'version' => 7,
             'summary' => 'Manage MailChimp Campaigns',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -56,13 +61,24 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         );
     }
 
-    static protected $defaults = array(
+    const defaultContentType = "url";
 
-        );
+    const schemaVersion = 2;
+
+    public function __construct() {
+
+        $this->set("contentType", self::defaultContentType);
+        $this->set("schemaVersion", 0); // default
+
+        parent::__construct();
+    }
+
 
     public function init() {
 
         parent::init();
+
+        $this->checkSchema();
 
         $this->modules->get("JqueryWireTabs");
         $this->mailchimp = $this->modules->get("MailChimpNewsletter");
@@ -112,7 +128,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $out = "";
 
         $this->fuel->set('processHeadline', 'Campaigns');
-        $out .= "<h2>" . $this->_("Campaigns") . "</h2>";
+        // $out .= "<h2>" . $this->_("Campaigns") . "</h2>";
 
         $folders_list = '';
         $folders = $this->mailchimp->_get("campaign-folders", array("count" => 50));
@@ -211,11 +227,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             $form->email_test->required = 0;
             $form->processInput($this->input->post);
 
-            if(!$form->get("newsletter_url")->value && !$form->get("newsletter_id")->value){
-                $form->newsletter_id->error($this->_('Please select a newsletter page or enter a url below.'));
-                $this->error($this->_("There's no content specified for your campaign."));
-            }
-
             if(!count($form->getErrors())) {
 
                 $opts = array(
@@ -236,19 +247,45 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                     $opts['recipients']['segment_opts']['saved_segment_id'] = (int) $listSegmentID;
                 }
 
+                $newsletterPageUrl = $form->get("newsletter_url") ? $form->get("newsletter_url")->value : null;
+                $newsletterLangID = $form->get("newsletter_lang") ? $form->get("newsletter_lang")->value : null;
                 $newsletterPageID = (int) $form->get("newsletter_id")->value;
-                $newsletterPageUrl = $form->get("newsletter_url")->value;
 
                 $res = $this->mailchimp->_patch("campaigns/$campaign_id", $opts);
+
                 if($res && isset($res['id'])){
-                    $this->mailchimp->_put("campaigns/$campaign_id/content", array(
-                        "url" => $newsletterPageUrl,
+                    if($this->contentType == "url") {
+                        $this->mailchimp->_put("campaigns/$campaign_id/content", array(
+                                "url" => $newsletterPageUrl,
                         ));
-                    $this->_update($newsletterPageID, $newsletterPageUrl, $campaign_id, $form->get("list_id")->value, $listSegmentID);
+                    }
+                    if($this->contentType == "html") {
+                        if($this->wire("languages") && count($this->wire("languages")) > 1) {
+                            $lang = $this->wire("languages")->get($newsletterLangID);
+                            $_savedlang = $this->wire("user")->language;
+                            $this->wire("user")->language = $lang;
+                            $newsletterHtml = $this->wire("pages")->get($newsletterPageID)->render();
+                            $this->wire("user")->language = $_savedlang;
+                        } else {
+                            $newsletterHtml = $this->wire("pages")->get($newsletterPageID)->render();
+                        }
+
+                        if($newsletterHtml) {
+                            $res2 = $this->mailchimp->_put("campaigns/{$res['id']}/content", array(
+                                    "html" => $newsletterHtml
+                                ));
+                        } else {
+                            $this->error("No html could be rendered and sent to MailChimp.");
+                        }
+                    }
+
+                    $this->_update($newsletterPageID, $newsletterPageUrl, $newsletterLangID, $campaign_id, $form->get("list_id")->value, $listSegmentID);
                     $this->message($this->_('Campaign updated.'));
+
                 } else {
                     $this->error($this->_('Campaign could not be updated.'));
                 }
+
                 $this->session->redirect("../edit/?id=$campaign_id");
             }
         }
@@ -376,14 +413,9 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             $form = $this->_buildAddForm();
             $form->processInput($this->input->post);
 
-            $newsletterPageUrl = $form->get("newsletter_url")->value;
+            $newsletterPageUrl = $form->get("newsletter_url") ? $form->get("newsletter_url")->value : null;
+            $newsletterLangID = $form->get("newsletter_lang") ? $form->get("newsletter_lang")->value : null;
             $newsletterPageID = (int) $form->get("newsletter_id")->value;
-
-
-            if((!$newsletterPageUrl) && (!$newsletterPageID)){
-                $form->newsletter_id->error($this->_('Please select a newsletter page or enter a url below.'));
-                $this->error($this->_('No content specified. Please select a newsletter or enter a URL.'));
-            }
 
             if(!$form->getErrors()){
 
@@ -417,10 +449,39 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
                 $res = $this->mailchimp->_post("campaigns", $opts);
 
                 if($res && isset($res['id'])){
-                    $this->mailchimp->_put("campaigns/{$res['id']}/content", array("url" => $newsletterPageUrl));
-                    $this->_insert($newsletterPageID, $newsletterPageUrl, $res['id'], $opts['recipients']['list_id'], $listSegmentID);
-                    $this->message(sprintf($this->_("New campaign '%s' created on MailChimp"), $opts['settings']['title']));
-                    $this->session->redirect("../edit/?id={$res['id']}");
+                    $res2 = "";
+                    if($this->contentType == "url"){
+                        // send url (public newsletters)
+                        $res2 = $this->mailchimp->_put("campaigns/{$res['id']}/content", array("url" => $newsletterPageUrl));
+                        $this->_insert($newsletterPageID, $newsletterPageUrl, NULL, $res['id'], $opts['recipients']['list_id'], $listSegmentID);
+
+                    } else if($this->contentType == "html") {
+                        // send the html (if not a public newsletters)
+                        if($this->wire("languages") && count($this->wire("languages")) > 1) {
+                            $lang = $this->wire("languages")->get($newsletterLangID);
+                            $_savedlang = $this->wire("user")->language;
+                            $this->wire("user")->language = $lang;
+                            $newsletterHtml = $this->wire("pages")->get($newsletterPageID)->render();
+                            $this->wire("user")->language = $_savedlang;
+                        } else {
+                            $newsletterHtml = $this->wire("pages")->get($newsletterPageID)->render();
+                        }
+
+                        if($newsletterHtml) {
+                            $res2 = $this->mailchimp->_put("campaigns/{$res['id']}/content", array("html" => $newsletterHtml));
+                        } else {
+                            $this->error("No html could be rendered and sent to MailChimp.");
+                        }
+                    }
+
+                    if($res2 && $res2['success']) {
+                        $this->_insert($newsletterPageID, $newsletterPageUrl, $newsletterLangID, $res['id'], $opts['recipients']['list_id'], $listSegmentID);
+                        $this->message(sprintf($this->_("New campaign '%s' created on MailChimp"), $opts['settings']['title']));
+                        $this->session->redirect("../edit/?id={$res['id']}");
+                    } else {
+                        $this->error(sprintf($this->_("Could not create Campaign on MailChimp"), $opts['settings']['title']));
+                    }
+
                 } else {
                     $this->error(sprintf($this->_("Could not create Campaign on MailChimp"), $opts['settings']['title']));
                     $this->session->redirect("../add/");
@@ -624,7 +685,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         }
 
         // create list array to easy map campaigns lists id getting the name of the list
-        $lists = $this->mailchimp->_get("lists");
+        $lists = $this->mailchimp->_get("lists", array("count" => 100));
         $listsMap = array();
         foreach($lists['lists'] as $list){
             $listsMap[$list['id']] = $list['name'];
@@ -702,7 +763,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         if(!$exists) {
             $listID = $data['recipients']["list_id"];
             $listSegmentID = isset($data['recipients']['segment_opts']) ? $data['recipients']['segment_opts']['saved_segment_id'] : NULL;
-            $this->_insert(NULL, NULL, $campaign_id, $listID, $listSegmentID);
+            $this->_insert(NULL, NULL, NULL, $campaign_id, $listID, $listSegmentID);
         }
 
         $form = $this->modules->get("InputfieldForm");
@@ -770,7 +831,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->notes = $this->_("NOTE: If you change the list here, the list's default settings will be entered as you defined them in Mailchimp.");
         $field->required = 1;
 
-        $lists = $this->mailchimp->_get("lists");
+        $lists = $this->mailchimp->_get("lists", array("count" => 100));
 
         if(is_array($lists["lists"])){
             $field->addOption("", "");
@@ -866,11 +927,14 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
     protected function _buildContentTab($data){
 
         $campaign_id = $data['id'];
-        $newsletter_url = $this->_getNewsletterURL($campaign_id);
 
         $newsletter_title = "";
+
+        $newsletter_url = $this->_getNewsletterURL($campaign_id);
         $newsletter_id = $this->_getNewsletterPageID($campaign_id);
+        $newsletterlang_id = $this->_getNewsletterLangID($campaign_id);
         $newsletterPage = $this->pages->get((int) $newsletter_id);
+
         if($newsletterPage->id){
             $newsletter_title = $newsletterPage->title;
         }
@@ -899,24 +963,42 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->attr('value', $newsletter_id);
         $wrapper->add($field);
 
-        // newsletter url
-        $field = $this->modules->get("InputfieldURL");
-        $field->attr('name',"newsletter_url");
-        $field->label = $this->_("Newsletter URL");
-        $field->description = $this->_("The public URL for the email content.");
-        $field->entityEncodeText = false;
-        $url_required = 1;
-        if($newsletterPage->id){
-            $field->description .= "<br>" . $this->_("Available URLs for this page") . ":";
-            $urls = wire("modules")->MailChimpNewsletter->getNewsletterUrlsArray($newsletterPage);
-            foreach($urls as $langID => $url){
-                $field->description .= "<br>" . $url['url'];
+        if($this->contentType == "url"){
+            // newsletter url
+            $field = $this->modules->get("InputfieldURL");
+            $field->attr('name',"newsletter_url");
+            $field->label = $this->_("Newsletter URL");
+            $field->description = $this->_("The public URL for the email content.");
+            $field->entityEncodeText = false;
+            $url_required = 1;
+            if($newsletterPage->id){
+                $field->description .= "<br>" . $this->_("Available URLs for this page") . ":";
+                $urls = wire("modules")->MailChimpNewsletter->getNewsletterUrlsArray($newsletterPage);
+                foreach($urls as $langID => $url){
+                    $field->description .= "<br>" . $url['url'];
+                }
             }
+
+            $field->required = $url_required;
+            $field->attr('value', $newsletter_url);
+            $wrapper->add($field);
         }
 
-        $field->required = $url_required;
-        $field->attr('value', $newsletter_url);
-        $wrapper->add($field);
+        if($this->contentType == "html") {
+            // if sending html and we have more than one language installed
+            if(count($this->wire("languages")) > 1){
+                $field = $this->modules->get("InputfieldRadios");
+                $field->attr('name',"newsletter_lang");
+                $field->label = $this->_("Newsletter Language");
+                foreach($this->wire("languages") as $lang) {
+                    $field->addOption($lang->id, $lang->title);
+                }
+                $field->attr('value',(int) $newsletterlang_id);
+                $field->required = 1;
+                $field->description = $this->_("The language you want to use from this newsletter.");
+                $wrapper->add($field);
+            }
+        }
 
         $url = $this->pages->get("name=mailchimp-campaigns")->url;
 
@@ -1126,7 +1208,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         $field->required = 1;
         $field->columnWidth = 100;
 
-        $lists = $this->mailchimp->_get("lists");
+        $lists = $this->mailchimp->_get("lists", array("count" => 100));
 
 
         if(is_array($lists["lists"])){
@@ -1241,12 +1323,26 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             $this->message($this->_("Newsletter Parent Page ID not specified in MailChimpNewsletter module settings. You still can alternatively enter a URL below."));
         }
 
-        $field = $this->modules->get("InputfieldURL");
-        $field->attr('name',"newsletter_url");
-        $field->entityEncodeText = false;
-        $field->label = $this->_("Newsletter URL");
-        $field->description = $this->_("The public URL for the email content. This will be populated automaticly when selecting the newsletter page above.");
+        if($this->contentType == "url"){
+            $field = $this->modules->get("InputfieldURL");
+            $field->attr('name',"newsletter_url");
+            $field->entityEncodeText = false;
+            $field->label = $this->_("Newsletter URL");
+            $field->description = $this->_("The public URL for the email content. This will be populated automaticly when selecting the newsletter page above.");
+        }
 
+        if($this->contentType == "html"){
+            // if sending html and we have more than one language installed
+            if(count($this->wire("languages")) > 1){
+                $field = $this->modules->get("InputfieldRadios");
+                $field->attr('name',"newsletter_lang");
+                $field->label = $this->_("Newsletter Language");
+                foreach($this->wire("languages") as $lang) {
+                    $field->addOption($lang->id, $lang->title);
+                }
+                $field->description = $this->_("The language you want to use from this newsletter.");
+            }
+        }
 
         if(wire("input")->get->nlid) {
             $nlid = (int) wire("input")->get->nlid;
@@ -1260,9 +1356,6 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             }
         }
 
-        if(count(wire("languages")) > 1){
-            $field->notes .= $this->_("We detected multiple languages. Select a Newsletter above to get available URLs and copy paste one of them.");
-        }
 
         $url_required = 1;
 
@@ -1288,6 +1381,13 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         return $arr['newsletter_id'];
     }
 
+    protected function _getNewsletterLangID($cid) {
+        $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$cid';";
+        $res = $this->db->query($query);
+        $arr = $res->fetch_array();
+        return $arr['lang_id'];
+    }
+
     protected function _getNewsletterURL($cid) {
         $query = "SELECT * FROM {$this->className} WHERE campaign_id = '$cid';";
         $res = $this->db->query($query);
@@ -1295,21 +1395,24 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
         return $arr['newsletter_url'];
     }
 
-    protected function _insert($newsletter_id, $newsletter_url, $campaign_id, $list_id, $segment_id) {
+    protected function _insert($newsletter_id, $newsletter_url, $newsletter_lang, $campaign_id, $list_id, $segment_id) {
         $newsletter_url = $this->sanitizer->url($newsletter_url);
         if($newsletter_id == 0) $newsletter_id = "NULL";
-        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, newsletter_url, list_id, segment_id, created)
-                VALUES ('$campaign_id',$newsletter_id,'$newsletter_url','$list_id', '$segment_id', now())";
+        if($newsletter_lang == 0) $newsletter_lang = "NULL";
+        $query = "INSERT INTO {$this->className()} (campaign_id, newsletter_id, newsletter_url, lang_id, list_id, segment_id, created)
+                VALUES ('$campaign_id', $newsletter_id, '$newsletter_url', $newsletter_lang, '$list_id', '$segment_id', now())";
         $result = $this->db->query($query);
         $this->message($this->_("New Campaign inserted/updated"));
         return @mysqli_insert_id($this->db);
     }
 
-    protected function _update($newsletter_id, $newsletter_url, $campaign_id, $list_id, $segment_id) {
+    protected function _update($newsletter_id, $newsletter_url, $newsletter_lang, $campaign_id, $list_id, $segment_id) {
         $newsletter_url = $this->sanitizer->url($newsletter_url);
         if($newsletter_id == 0) $newsletter_id = "NULL";
+        if($newsletter_lang == 0) $newsletter_lang = "NULL";
         $values = "newsletter_id=" . $newsletter_id . ",";
         $values .= "newsletter_url='" . $newsletter_url . "',";
+        $values .= "lang_id='" . $newsletter_lang . "',";
         $values .= "list_id='" . $list_id . "',";
         $values .= "segment_id='" . $segment_id . "'";
         $query = "UPDATE {$this->className} SET $values WHERE campaign_id='$campaign_id'";
@@ -1349,6 +1452,7 @@ class MailChimpCampaigns extends Process implements ConfigurableModule {
             id INT UNSIGNED NOT NULL AUTO_INCREMENT,
             newsletter_id INT NULL,
             newsletter_url VARCHAR(255) NULL,
+            lang_id INT NULL,
             list_id VARCHAR(32) NULL,
             segment_id VARCHAR(32) NULL,
             campaign_id VARCHAR(32) NULL,
@@ -1375,9 +1479,50 @@ _END;
 
     }
 
+    public function checkSchema() {
+
+        if($this->schemaVersion < 2) {
+            $langSchema = "INT NULL";
+            // add website field for PW 2.3+
+            $database = $this->wire('database');
+            try {
+                $database->query("ALTER TABLE `{$this->className}` ADD lang_id $langSchema");
+                $data = $this->wire("modules")->getModuleConfigData("MailChimpCampaigns");
+                $data['schemaVersion'] = self::schemaVersion;
+                $this->wire("modules")->saveModuleConfigData("MailChimpCampaigns", $data);
+                $this->message("Updated MailChimpCampaign DB schema to version 2");
+            } catch(\Exception $e) {
+                $this->error($e->getMessage(), Notice::log);
+            }
+
+        }
+
+    }
+
     public static function getModuleConfigInputfields(array $data) {
+
         if($data) {} // ignore
         $inputfields = new InputfieldWrapper();
+        $modules = wire("modules");
+
+        $f = $modules->InputfieldRadios;
+        $f->label = "Content Type";
+        $f->description = __("How should campaign content be sent to Mailchimp. If your Newsletter is viewable by the public, you should choose 'html'.");
+        $f->addOptions(array(
+                "url" => "url",
+                "html" => "html",
+            ));
+        $f->attr("name", "contentType");
+        $f->attr("value", !empty($data["contentType"]) ? $data["contentType"] : self::defaultContentType);
+        $inputfields->add($f);
+
+        $f = $modules->InputfieldInteger;
+        $f->label = "SchemaVersion";
+        $f->attr("name", "schemaVersion");
+        $f->attr("disabled", "disabled");
+        $f->attr("value", !empty($data["schemaVersion"]) ? $data["schemaVersion"] : 0);
+        $inputfields->add($f);
+
         return $inputfields;
     }
 

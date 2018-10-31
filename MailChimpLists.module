@@ -13,11 +13,16 @@
  * http://www.ryancramer.com
  *
  * Changelog:
- * v0.0.4
- *     - hide member subscription, add member search
  *
- * v0.0.3
- *     - update to Mailchimp v3
+ * v.0.0.5
+ * - fix issue when more than 10 lists
+ * - fix issue with WireTabs in newer PW 3+
+ *
+ * v.0.0.4
+ * - hide member subscription, add member search
+ *
+ * v.0.0.3
+ * - update to Mailchimp v3
  *
  */
 
@@ -34,7 +39,7 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Lists',
-            'version' => 4,
+            'version' => 5,
             'summary' => 'Manage MailChimp Lists',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -49,10 +54,9 @@ class MailChimpLists extends Process implements ConfigurableModule {
 
     public function init() {
         parent::init();
+
         $tabs = $this->modules->get("JqueryWireTabs");
-        wire('config')->js('JqueryWireTabs', array(
-            'rememberTabs' => (int) 1,
-            ));
+
         $this->mailchimp = $this->modules->get("MailChimpNewsletter");
         $this->apikey = $this->mailchimp->apikey;
     }
@@ -62,8 +66,10 @@ class MailChimpLists extends Process implements ConfigurableModule {
         $out = "";
 
         $this->fuel->set('processHeadline', 'Lists');
-        $out .= "<h2>" . $this->_("Lists") . "</h2>";
-        $retval = $this->mailchimp->_get("lists");
+
+        $retval = $this->mailchimp->_get("lists", array(
+            "count" => 100,
+            ));
 
        if(empty($retval)) return $this->error($this->_("No lists found. Create a new list first."));
 
@@ -462,60 +468,63 @@ class MailChimpLists extends Process implements ConfigurableModule {
             $preview->value .= $pagination->renderPager();
         }
 
-        $fieldsetSubscribe = $this->modules->get("InputfieldFieldset");
-        $fieldsetSubscribe->label = $this->_("Subscribe an E-mail Address");
-        $fieldsetSubscribe->collapsed = Inputfield::collapsedYes;
+        // $fieldsetSubscribe = $this->modules->get("InputfieldFieldset");
+        // $fieldsetSubscribe->label = $this->_("Subscribe an E-mail Address");
+        // $fieldsetSubscribe->collapsed = Inputfield::collapsedYes;
 
-        $field = $this->modules->get("InputfieldEmail");
-        $field->label = $this->_("E-mail Address");
-        $field->attr("name", "email");
-        $fieldsetSubscribe->add($field);
+        // $field = $this->modules->get("InputfieldEmail");
+        // $field->label = $this->_("E-mail Address");
+        // $field->attr("name", "email");
+        // $fieldsetSubscribe->add($field);
 
-        if($data['stats']['merge_field_count']) {
+        // if($data['stats']['merge_field_count']) {
 
-            $mergeFields = $this->mailchimp->_get("lists/{$list_id}/merge-fields");
+        //     $mergeFields = $this->mailchimp->_get("lists/{$list_id}/merge-fields");
 
-            foreach($mergeFields['merge_fields'] as $mergefield){
-                $type = ucfirst($mergefield['type']);
-                if($type == "Radio") $type = "Radios";
-                if($type == "Address") $type = "Text";
-                $field = $this->modules->get("Inputfield{$type}");
-                $field->label = $mergefield['name'];
-                $field->attr("name", "merge_" . $mergefield['tag']);
-                if(isset($mergefield["options"]["choices"])){
-                    foreach($mergefield["options"]["choices"] as $key => $choice){
-                        $field->addOption($choice, $choice); // value is label (mailchimp)
-                    }
-                }
-                $fieldsetSubscribe->add($field);
-            }
-        }
+        //     foreach($mergeFields['merge_fields'] as $mergefield){
+        //         $type = ucfirst($mergefield['type']);
+        //         if($type == "Radio") $type = "Radios";
+        //         if($type == "Address") $type = "Text";
+        //         if($type == "Phone") $type = "Text";
 
-        if(count(wire("languages"))){
-            $field = $this->modules->InputfieldRadios;
-            $field->label = $this->_("Language");
-            $field->attr("name", "language");
-            $field->optionColumns = 4;
-            foreach(wire("languages") as $lang){
-                $name = ($lang->isDefault()) ? "de" : $lang->name;
-                $field->addOption($name, "$lang->title");
-            }
-            $fieldsetSubscribe->add($field);
-        }
+        //         $field = $this->modules->get("Inputfield{$type}");
+        //         $field->label = $mergefield['name'];
+        //         $field->attr("name", "merge_" . $mergefield['tag']);
 
-        $field = $this->modules->get("InputfieldSelect");
-        $field->label = $this->_("E-mail Type");
-        $field->attr("name", "email_type");
-        $field->addOptions(array(
-                           'html' => 'HTML',
-                           'text' => 'Text'
-                           ));
-        $fieldsetSubscribe->add($field);
+        //         if(isset($mergefield["options"]["choices"])){
+        //             foreach($mergefield["options"]["choices"] as $key => $choice){
+        //                 $field->addOption($choice, $choice); // value is label (mailchimp)
+        //             }
+        //         }
+        //         $fieldsetSubscribe->add($field);
+        //     }
+        // }
 
-        $field = $this->modules->get("InputfieldSubmit");
-        $field->attr("name", "subscribe");
-        $field->attr("value", "subscribe");
-        $fieldsetSubscribe->add($field);
+        // if(count(wire("languages"))){
+        //     $field = $this->modules->InputfieldRadios;
+        //     $field->label = $this->_("Language");
+        //     $field->attr("name", "language");
+        //     $field->optionColumns = 4;
+        //     foreach(wire("languages") as $lang){
+        //         $name = ($lang->isDefault()) ? "de" : $lang->name;
+        //         $field->addOption($name, "$lang->title");
+        //     }
+        //     $fieldsetSubscribe->add($field);
+        // }
+
+        // $field = $this->modules->get("InputfieldSelect");
+        // $field->label = $this->_("E-mail Type");
+        // $field->attr("name", "email_type");
+        // $field->addOptions(array(
+        //                    'html' => 'HTML',
+        //                    'text' => 'Text'
+        //                    ));
+        // $fieldsetSubscribe->add($field);
+
+        // $field = $this->modules->get("InputfieldSubmit");
+        // $field->attr("name", "subscribe");
+        // $field->attr("value", "subscribe");
+        // $fieldsetSubscribe->add($field);
 
         /**
          * Search subscribers
