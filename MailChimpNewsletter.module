@@ -11,6 +11,8 @@
  * http://www.ryancramer.com
  *
  * Changelog:
+ *  v.0.0.7
+ *  - fix issue with ajax requests (ie Repeater fields) on hook
  *
  *  v.0.0.6
  *  - fix error on first install when no apikey is yet configured
@@ -51,7 +53,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 6,
+            'version' => 7,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -195,6 +197,8 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     }
 
     public function hookPageEditForm($event) {
+
+        if($this->wire("config")->ajax) return;
 
         $page = $event->object->getPage();
         if(!$this->isNewsletterPage($page)) return;
