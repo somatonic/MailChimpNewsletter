@@ -14,6 +14,11 @@
  *
  *
  * Changelog:
+ *
+ *  v.0.0.8
+ *  - fix some small issue with campaign stats
+ *  - added workaround for translations when using page render and changing user lang
+ *
  *  v.0.0.7
  *  - added config option to send newsletter html to mailchimp instead of the url
  *    language now can be set via radio options if set to "html"
@@ -265,6 +270,9 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
                             $lang = $this->wire("languages")->get($newsletterLangID);
                             $_savedlang = $this->wire("user")->language;
                             $this->wire("user")->language = $lang;
+                            if(file_exists($this->wire("config")->paths->templates . "_translations.php"))) {
+                                include($this->wire("config")->paths->templates . "_translations.php")
+                            }
                             $newsletterHtml = $this->wire("pages")->get($newsletterPageID)->render();
                             $this->wire("user")->language = $_savedlang;
                         } else {
@@ -528,7 +536,7 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
         $field->value .= "<p class='MC_stat'><span>{$openRate}</span>Open rate</p>";
         $lastOpenDate = $reportData['opens']['last_open'] ? $this->dateGmtToLocal($reportData['opens']['last_open']) : "N/A";
         $field->value .= "<p class='MC_stat'><span class='date'>" . $lastOpenDate . "</span>Last opened<br/></p>";
-
+        $field->value .= "</div>";
 
         $geoStats = $this->mailchimp->_get("reports/$campaign_id/locations");
         $table = wire("modules")->MarkupAdminDataTable;
@@ -542,7 +550,6 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
         }
         $field->value .= $table->render();
 
-        $field->value .= "</div>";
         $wrapper->add($field);
         $form->add($wrapper);
 
