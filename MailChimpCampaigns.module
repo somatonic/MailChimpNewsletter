@@ -270,8 +270,8 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
                             $lang = $this->wire("languages")->get($newsletterLangID);
                             $_savedlang = $this->wire("user")->language;
                             $this->wire("user")->language = $lang;
-                            if(file_exists($this->wire("config")->paths->templates . "_translations.php"))) {
-                                include($this->wire("config")->paths->templates . "_translations.php")
+                            if(file_exists($this->wire("config")->paths->templates . "_translations.php")) {
+                                include($this->wire("config")->paths->templates . "_translations.php");
                             }
                             $newsletterHtml = $this->wire("pages")->get($newsletterPageID)->render();
                             $this->wire("user")->language = $_savedlang;
