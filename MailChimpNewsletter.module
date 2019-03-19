@@ -11,6 +11,9 @@
  * http://www.ryancramer.com
  *
  * Changelog:
+ *  v.0.0.8
+ *  -fix issue with timeout 10s being to short for some, upped to 30s
+ *
  *  v.0.0.7
  *  - fix issue with ajax requests (ie Repeater fields) on hook
  *
