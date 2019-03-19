@@ -16,6 +16,8 @@
  * Changelog:
  *
  *  v.0.0.8
+ *  - fix issue with double inserts
+ *  - fix issue with exists check and inserting campaigns when already exists
  *  - fix some small issue with campaign stats
  *  - added workaround for translations when using page render and changing user lang
  *
@@ -55,7 +57,7 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Campaigns',
-            'version' => 7,
+            'version' => 8,
             'summary' => 'Manage MailChimp Campaigns',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -179,22 +181,23 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
         $options['sort_dir'] = "DESC";
         $retval = $this->mailchimp->_get("campaigns", $options);
 
-        if(count($retval['campaigns'])){
+        if($retval && count($retval['campaigns'])){
             $campaignTable = $this->_campaignsTable($retval['campaigns'])->render();
+            $pagination = new PageArray();
+            $pagination->setTotal($retval["total_items"]);
+            $pagination->setLimit($limit);
+            $pagination->setStart($startCount);
+
+            $total = "<p>Total: " . $retval['total_items'] . "</p>";
+            $content = "<div class='campaigns-result'>$campaignTable</div>";
+            $content .= $pagination->renderPager();
+            $content .= $total;
+            $out .= $folders_list . $content . $add->render();
         } else {
             $campaignTable = $this->_("No campaigns");
         }
 
-        $pagination = new PageArray();
-        $pagination->setTotal($retval["total_items"]);
-        $pagination->setLimit($limit);
-        $pagination->setStart($startCount);
 
-        $total = "<p>Total: " . $retval['total_items'] . "</p>";
-        $content = "<div class='campaigns-result'>$campaignTable</div>";
-        $content .= $pagination->renderPager();
-        $content .= $total;
-        $out .= $folders_list . $content . $add->render();
 
         return $out;
 
@@ -462,7 +465,6 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
                     if($this->contentType == "url"){
                         // send url (public newsletters)
                         $res2 = $this->mailchimp->_put("campaigns/{$res['id']}/content", array("url" => $newsletterPageUrl));
-                        $this->_insert($newsletterPageID, $newsletterPageUrl, NULL, $res['id'], $opts['recipients']['list_id'], $listSegmentID);
 
                     } else if($this->contentType == "html") {
                         // send the html (if not a public newsletters)
@@ -1439,7 +1441,7 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
     protected function _exists($campaign_id) {
         $query = "SELECT * FROM {$this->className()} WHERE campaign_id='$campaign_id'";
         $result = $this->db->query($query);
-        if($result->num_rows == 1) return true;
+        if($result->num_rows >= 1) return true;
         return false;
     }
 
