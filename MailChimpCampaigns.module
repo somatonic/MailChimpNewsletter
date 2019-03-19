@@ -14,6 +14,8 @@
  *
  *
  * Changelog:
+ *  v.0.0.0.9
+ *  - fix issue with campaigns listing
  *
  *  v.0.0.8
  *  - fix issue with double inserts
@@ -57,7 +59,7 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
 
         return array(
             'title' => 'MailChimp Campaigns',
-            'version' => 8,
+            'version' => 9,
             'summary' => 'Manage MailChimp Campaigns',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -167,7 +169,7 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
         $options = array();
 
         if(wire("input")->get->folder_id){
-            $options["folder_id"] = (int) wire("input")->get->folder_id;
+            $options["folder_id"] = wire("input")->get->folder_id;
             $this->input->whitelist("folder_id", wire("input")->get->folder_id);
         }
 
@@ -192,12 +194,14 @@ class MailChimpCampaigns extends Process implements Module, ConfigurableModule {
             $content = "<div class='campaigns-result'>$campaignTable</div>";
             $content .= $pagination->renderPager();
             $content .= $total;
-            $out .= $folders_list . $content . $add->render();
+            $out .= $folders_list . $content;
         } else {
             $campaignTable = $this->_("No campaigns");
+            $content = "<div class='campaigns-result'>$campaignTable</div>";
+            $out .= $content;
         }
 
-
+        $out .= $add->render();
 
         return $out;
 

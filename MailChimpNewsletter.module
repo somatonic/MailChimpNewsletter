@@ -53,7 +53,7 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
 
         return array(
             'title' => 'MailChimp Newsletter',
-            'version' => 7,
+            'version' => 8,
             'summary' => 'MailChimp Newsletter',
             'author' => "Philipp Urlich 'Soma'",
             'href' => '',
@@ -110,8 +110,8 @@ class MailChimpNewsletter extends WireData implements Module, ConfigurableModule
     public function __call($method, $args){
         $method = str_replace("_", "", $method);
         if(!method_exists($this->mailchimp, "$method")) throw new WireException("function $method() does not exist");
+        $args[] = 30; // add third argument (timeout in seconds) to call
         $res = call_user_func_array(array($this->mailchimp, $method), $args);
-
 
         wire("log")->save("mailchimp", "Action: $method, Args: " . print_r($args, true));
         wire("log")->save("mailchimp", "Action: $method, Res: " . print_r($res, true));
